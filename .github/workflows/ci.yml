@@ -118,12 +118,32 @@ jobs:
           echo "--- configured url rewrites ---"
           git config --global --get-regexp '^url\.' || echo "(none configured)"
           echo "--- git ls-remote ---"
-          if git ls-remote "$URL" >/dev/null; then
+          # Capture stderr so the branch below can read *which* refusal this was. The two
+          # look alike and mean opposite things, and telling them apart is the difference
+          # between regenerating a token and editing its repository access.
+          if err=$(git ls-remote "$URL" 2>&1 >/dev/null); then
             echo "reachable"
           elif [ "$PAT_SET" = "1" ]; then
-            echo "::error::$URL is unreachable even though EVENTBUS_READ_PAT is set. The \
-          token is most likely expired, or not scoped to agentic-sdlc-eventbus. It needs \
-          to be a fine-grained PAT with read-only Contents access to that repository."
+            echo "$err"
+            if echo "$err" | grep -qi "not found"; then
+              # GitHub answers 404, not 403, for a repository a fine-grained token cannot
+              # see - deliberately, so it does not leak whether the repo exists. So this
+              # is NOT an auth failure: the credential was accepted. The token simply has
+              # no access to this repository.
+              echo "::error::The token in EVENTBUS_READ_PAT authenticated successfully, \
+          but has no access to agentic-sdlc-eventbus - GitHub answers 'Repository not \
+          found' rather than 'denied' for a repo a fine-grained token cannot see, so this \
+          is a SCOPE problem and not an expiry or credential problem. Do not regenerate \
+          it. Edit the token at Settings > Developer settings > Fine-grained tokens: set \
+          Repository access to 'Only select repositories' and include \
+          agentic-sdlc-eventbus, with Contents: Read-only. The default, 'Public \
+          repositories', cannot see a private repo, which is the usual cause."
+            else
+              echo "::error::The token in EVENTBUS_READ_PAT was rejected outright \
+          ('Invalid username or token' or similar), so the credential itself is bad - \
+          expired, revoked, or malformed. This one does need regenerating, unlike the \
+          'Repository not found' case."
+            fi
             exit 1
           else
             echo "::error::$URL is not readable anonymously and EVENTBUS_READ_PAT is not \

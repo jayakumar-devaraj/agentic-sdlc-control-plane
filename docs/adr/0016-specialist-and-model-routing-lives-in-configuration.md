@@ -37,6 +37,15 @@ therefore unchanged, and both continue to pass with the second tenant fully rout
 The path is overridable with `SPECIALIST_ROUTING_FILE` so a deployment can mount its own table
 without rebuilding, which is the same posture `FIXTURES_DIR` already has.
 
+**The resolver walks out of the package to find it, and that is safe here for a reason worth
+recording.** `agentic-sdlc-cobol-modernizer` ADR-0055 found that six modules resolving their data
+files by walking `parents[3]` all broke the moment the project was installed as a wheel — a built
+wheel contained zero non-Python files, and nothing in CI could catch it because CI installs with
+`pip install -e`, where the walk still lands on the repository root. This repository is never
+installed as a wheel: its image is built by `COPY . .` into `/app`, so `config/` sits beside the
+package at runtime exactly as it does in a checkout. The env override exists so that a deployment
+which does move it is not relying on that walk at all.
+
 ### 2. The routing key is the target repository, not the scenario type
 
 `GraphState.scenario_type` is `greenfield | brownfield | ambiguous`. Those are *shapes of work* that

@@ -99,14 +99,45 @@ jobs:
             echo "GET /repos/jayakumar-devaraj/agentic-...   -> $code_repo"
             echo "token length: ${#EVENTBUS_READ_PAT}"
 
-            # `x-access-token:<token>`, not a bare `<token>@`. The bare form puts the
-            # token in the *username* position with no password: classic PATs tolerate
-            # that, fine-grained PATs do not - and fine-grained is what this secret is
-            # specified to be. 080ffae used the bare form, so restoring it verbatim
-            # would have left a format bug that fails identically to an expired token
-            # and is much harder to tell apart from one.
-            git config --global "url.https://x-access-token:${EVENTBUS_READ_PAT}@github.com/.insteadOf" "https://github.com/"
-            echo "EVENTBUS_READ_PAT is set - private eventbus will resolve"
+            # **Pick the credential form by testing it, not by believing something about
+            # it.** An earlier version asserted that fine-grained PATs reject the bare
+            # `<token>@host` form and switched away from it on that basis. The assertion
+            # was never checked, and while it was in place the API said 200 for this very
+            # repository while git said "Repository not found" - a contradiction that can
+            # only be the transport, not the token.
+            #
+            # `extraheader` is listed first because it is what actions/checkout itself
+            # uses, and because the same Bearer header is already proven to work above.
+            REWRITE_OK=0
+            for form in extraheader bare x-access-token; do
+              git config --global --remove-section "http.https://github.com/" 2>/dev/null || true
+              git config --global --unset-all "url.https://x-access-token:${EVENTBUS_READ_PAT}@github.com/.insteadOf" 2>/dev/null || true
+              git config --global --unset-all "url.https://${EVENTBUS_READ_PAT}@github.com/.insteadOf" 2>/dev/null || true
+              case "$form" in
+                extraheader)
+                  git config --global "http.https://github.com/.extraheader" \
+                    "Authorization: Bearer ${EVENTBUS_READ_PAT}" ;;
+                bare)
+                  git config --global "url.https://${EVENTBUS_READ_PAT}@github.com/.insteadOf" \
+                    "https://github.com/" ;;
+                x-access-token)
+                  git config --global "url.https://x-access-token:${EVENTBUS_READ_PAT}@github.com/.insteadOf" \
+                    "https://github.com/" ;;
+              esac
+              if GIT_TERMINAL_PROMPT=0 git ls-remote \
+                  https://github.com/jayakumar-devaraj/agentic-sdlc-eventbus.git >/dev/null 2>&1; then
+                echo "credential form '$form' works - keeping it"
+                REWRITE_OK=1
+                break
+              fi
+              echo "credential form '$form' did not authenticate"
+            done
+            if [ "$REWRITE_OK" != "1" ]; then
+              echo "::error::EVENTBUS_READ_PAT is a valid token that the API accepts for this \
+          repository, but no git credential form authenticated with it. That is a transport \
+          problem rather than a token problem - see the status codes printed above."
+              exit 1
+            fi
             echo "PAT_SET=1" >> "$GITHUB_ENV"
           else
             echo "EVENTBUS_READ_PAT is not set - relying on anonymous access"

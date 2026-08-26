@@ -1,11 +1,16 @@
 name: ci
 
-# No repository secrets required. The agentic-events dependency lives in
-# agentic-sdlc-eventbus, which is public, so it resolves over anonymous HTTPS -
-# a fork of this repo gets a green build with nothing to configure.
+# One OPTIONAL repository secret: EVENTBUS_READ_PAT (ADR-0015).
+#
+# The agentic-events dependency lives in agentic-sdlc-eventbus, whose visibility
+# changes. This workflow works either way and needs no edit when it flips:
+#
+#   eventbus public  -> anonymous HTTPS; a fork gets a green build with nothing set
+#   eventbus private -> EVENTBUS_READ_PAT resolves it (fine-grained, read-only,
+#                       scoped to that one repository)
 #
 # This is separate from the RUNTIME PAT the service uses to clone tenant
-# repositories. CI never performs a real clone, so it needs no real credential.
+# repositories. CI never performs a real clone, so it needs no runtime credential.
 
 on:
   push:
@@ -54,16 +59,44 @@ jobs:
           git config --global user.email "ci@local"
           git config --global user.name "CI"
 
-      - name: Assert the shared contract package is reachable
-        # `agentic-events` is pulled from agentic-sdlc-eventbus over **anonymous** HTTPS.
-        # ADR-0006 / commit 080ffae dropped the build-time PAT on that basis and the
-        # reason holds: this image handles a real PAT at runtime, so a build step that
-        # reintroduced one would ship it.
+      - name: Configure read access to the agentic-events dependency
+        # Optional by design (ADR-0015). agentic-sdlc-eventbus changes visibility, and
+        # this build must work either way:
         #
-        # The trade is that eventbus going private breaks this build - and pip reports it
-        # as `fatal: could not read Username for 'https://github.com'`, which names
-        # neither the repository nor the setting. That cost nine minutes and a wrong
-        # first diagnosis on 2026-08-26. This check costs about a second and names it.
+        #   secret set   -> git uses it, a private eventbus resolves
+        #   secret unset -> anonymous HTTPS, a public eventbus resolves
+        #
+        # Never fails on an unset secret. An earlier version of this step (removed in
+        # 080ffae) required it, which is the opposite of the requirement here.
+        #
+        # `-n` on the value, not just "is it defined": interpolating an unset secret
+        # yields the empty string, and configuring url."https://@github.com/" is a
+        # *syntactically valid* rewrite carrying an empty credential. pip's clone then
+        # falls through to an interactive prompt and dies with "could not read Password"
+        # on a runner with no TTY - a message pointing at nothing. That trap is why the
+        # empty case must skip the config entirely rather than write it.
+        env:
+          EVENTBUS_READ_PAT: ${{ secrets.EVENTBUS_READ_PAT }}
+        run: |
+          if [ -n "$EVENTBUS_READ_PAT" ]; then
+            git config --global url."https://${EVENTBUS_READ_PAT}@github.com/".insteadOf "https://github.com/"
+            echo "EVENTBUS_READ_PAT is set - private eventbus will resolve"
+            echo "PAT_SET=1" >> "$GITHUB_ENV"
+          else
+            echo "EVENTBUS_READ_PAT is not set - relying on anonymous access"
+            echo "PAT_SET=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Assert the shared contract package is reachable
+        # Runs AFTER the step above, so it tests reachability with whatever credential
+        # is actually configured - which is what makes its two error messages able to
+        # tell "the repo is private and nothing is set" from "the token is wrong".
+        #
+        # It exists because pip's own failure is `fatal: could not read Username for
+        # 'https://github.com'`, which names neither the repository nor the setting that
+        # caused it. That cost nine minutes and a wrong first diagnosis on 2026-08-26 -
+        # the stale `jayakumard10` owner in the URL looks like the culprit and is not,
+        # since the rename redirect resolves fine. This costs about a second.
         run: |
           URL=$(grep -oE 'https://github\.com/[^@]+\.git' requirements.txt | head -1)
           echo "checking anonymous access to $URL"
@@ -72,12 +105,18 @@ jobs:
           export GIT_TERMINAL_PROMPT=0
           if git ls-remote "$URL" >/dev/null 2>&1; then
             echo "reachable"
+          elif [ "$PAT_SET" = "1" ]; then
+            echo "::error::$URL is unreachable even though EVENTBUS_READ_PAT is set. The \
+          token is most likely expired, or not scoped to agentic-sdlc-eventbus. It needs \
+          to be a fine-grained PAT with read-only Contents access to that repository."
+            exit 1
           else
-            echo "::error::$URL is not readable anonymously - agentic-sdlc-eventbus is \
-          probably set to private. The dependency install below WILL fail with a \
-          misleading 'could not read Username' error. Fix: set that repository back to \
-          public. Reintroducing a build-time PAT is deliberately not the answer here - \
-          see requirements.txt and commit 080ffae."
+            echo "::error::$URL is not readable anonymously and EVENTBUS_READ_PAT is not \
+          set, so agentic-sdlc-eventbus is private with no credential available. Either \
+          set that secret (fine-grained, read-only, scoped to that repo) under Settings > \
+          Secrets and variables > Actions, or make the repository public. Either works - \
+          see ADR-0015. Without one, the install below fails with a misleading 'could not \
+          read Username' error that names none of this."
             exit 1
           fi
 
@@ -157,15 +196,29 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Write local secret files for compose
+        env:
+          EVENTBUS_READ_PAT: ${{ secrets.EVENTBUS_READ_PAT }}
         run: |
-          # Both are placeholders. compose declares github_pat as a runtime secret
-          # for the consumer, so the source file must exist for the stack to be
-          # valid - but this job only builds the consumer and starts postgres, and
-          # never performs a clone, so the value is never used. A real PAT is only
-          # needed to actually run a job that clones a tenant repository.
+          # postgres_password is a placeholder: nothing here authenticates with it.
+          #
+          # github_pat is NOT a placeholder any more (ADR-0015). It is now also a
+          # *build* secret, because a private agentic-sdlc-eventbus needs a credential
+          # to resolve agentic-events. So this writes the real EVENTBUS_READ_PAT when
+          # one is configured, and writes an EMPTY file when one is not -- the
+          # Dockerfile tests `-s` and skips the git config entirely on an empty file,
+          # falling through to anonymous HTTPS. A placeholder string would be worse
+          # than nothing: it is non-empty, so the build would configure git with a
+          # credential that cannot authenticate.
+          #
+          # secrets/*.txt is gitignored, so nothing written here can be committed.
           mkdir -p secrets
-          printf 'not-a-real-pat-ci-placeholder' > secrets/github_pat.txt
+          printf '%s' "$EVENTBUS_READ_PAT" > secrets/github_pat.txt
           printf 'ci_local_password' > secrets/postgres_password.txt
+          if [ -s secrets/github_pat.txt ]; then
+            echo "build secret present"
+          else
+            echo "build secret empty - anonymous build (requires a public eventbus)"
+          fi
 
       - name: Start this service's own Postgres
         run: docker compose up -d postgres

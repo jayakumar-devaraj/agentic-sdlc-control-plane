@@ -10,14 +10,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-# agentic-events resolves over anonymous HTTPS. This build previously mounted a PAT
-# as a BuildKit secret because agentic-sdlc-eventbus was private; it is public now,
-# so no credential is involved at build time at all.
+# agentic-events comes from agentic-sdlc-eventbus, whose visibility changes. This
+# build works either way, and that is the requirement (ADR-0015).
+#
+# **The secret is optional by design.** Mounted and non-empty -> git is configured to
+# use it, so a private eventbus resolves. Absent or empty -> the install falls through
+# to anonymous HTTPS, so a public eventbus resolves with no credential involved at all.
+# Neither case needs this file edited, which is what "works public or private" means.
+#
+# **The credential never lands in the image.** A BuildKit secret exists only under
+# /run/secrets for the life of this RUN and is never written to a layer; the git config
+# it creates is removed inside the *same* layer. `Assert the built image carries no
+# credential` in CI checks /root/.gitconfig is 0 bytes and is the regression guard for
+# exactly this - it was deliberately kept when 080ffae removed the earlier version of
+# this block, so that restoring one could be verified rather than trusted.
 #
 # The RUNTIME PAT is a separate concern and is unchanged: every run clones its own
 # target repository, reading the token from GIT_PAT_FILE via a credential helper
 # invoked at request time. That is why git is installed above.
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=secret,id=github_pat \
+    sh -c ' \
+        if [ -s /run/secrets/github_pat ]; then \
+            git config --global url."https://$(cat /run/secrets/github_pat)@github.com/".insteadOf "https://github.com/"; \
+        fi && \
+        pip install --no-cache-dir -r requirements.txt; \
+        status=$?; \
+        rm -f /root/.gitconfig; \
+        exit $status \
+    '
 
 COPY . .
 

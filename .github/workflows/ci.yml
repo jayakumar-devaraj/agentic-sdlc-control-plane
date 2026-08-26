@@ -105,11 +105,20 @@ jobs:
         # since the rename redirect resolves fine. This costs about a second.
         run: |
           URL=$(grep -oE 'https://github\.com/[^@]+\.git' requirements.txt | head -1)
-          echo "checking anonymous access to $URL"
+          echo "checking access to $URL"
           # GIT_TERMINAL_PROMPT=0 so a private repo fails immediately instead of blocking
           # on a username prompt - the same thing that makes pip's own error so unhelpful.
           export GIT_TERMINAL_PROMPT=0
-          if git ls-remote "$URL" >/dev/null 2>&1; then
+
+          # Show what git was actually configured to do. Secrets are masked as *** in
+          # Actions logs, so this reveals whether the rewrite exists without revealing
+          # the token. An earlier version of this step swallowed git's stderr entirely
+          # and asserted a cause with no evidence for it - which is how a check ends up
+          # confidently naming the wrong thing.
+          echo "--- configured url rewrites ---"
+          git config --global --get-regexp '^url\.' || echo "(none configured)"
+          echo "--- git ls-remote ---"
+          if git ls-remote "$URL" >/dev/null; then
             echo "reachable"
           elif [ "$PAT_SET" = "1" ]; then
             echo "::error::$URL is unreachable even though EVENTBUS_READ_PAT is set. The \

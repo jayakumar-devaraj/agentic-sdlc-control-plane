@@ -127,6 +127,18 @@ jobs:
             #
             # `extraheader` is listed first because it is what actions/checkout itself
             # uses, and because the same Bearer header is already proven to work above.
+            # **actions/checkout writes a credential into the repo-LOCAL .git/config**, as
+            # `http.https://github.com/.extraheader` carrying the repo-scoped GITHUB_TOKEN.
+            # Local config beats global, so every git command run inside the workspace -
+            # including pip's clone - authenticates as that token, which by design cannot
+            # see any other repository. That is the whole explanation for an API that says
+            # 200 and a git that says "Repository not found", and it outranks every
+            # hypothesis about the token that was chased before it.
+            echo "--- repo-local credential left by actions/checkout ---"
+            git config --local --get-regexp '^http\.' | sed 's/AUTHORIZATION.*/AUTHORIZATION: <redacted>/' || echo "(none)"
+            git config --local --unset-all "http.https://github.com/.extraheader" 2>/dev/null || true
+            echo "removed it; the global credential below now applies"
+
             REWRITE_OK=0
             for form in extraheader bare x-access-token; do
               git config --global --remove-section "http.https://github.com/" 2>/dev/null || true

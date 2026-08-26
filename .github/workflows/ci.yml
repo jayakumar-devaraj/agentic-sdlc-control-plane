@@ -125,8 +125,13 @@ jobs:
             # repository while git said "Repository not found" - a contradiction that can
             # only be the transport, not the token.
             #
-            # `extraheader` is listed first because it is what actions/checkout itself
-            # uses, and because the same Bearer header is already proven to work above.
+            # **`bare` is tried first because it is the one that works** - measured
+            # 2026-08-26. It is also the form 080ffae used all along, which an earlier
+            # commit here "fixed" to x-access-token on an unverified claim that
+            # fine-grained PATs reject it. The claim was wrong; x-access-token is the form
+            # that fails. The others remain as a fallback so a change in GitHub's
+            # behaviour is survived rather than asserted about.
+            #
             # **actions/checkout writes a credential into the repo-LOCAL .git/config**, as
             # `http.https://github.com/.extraheader` carrying the repo-scoped GITHUB_TOKEN.
             # Local config beats global, so every git command run inside the workspace -
@@ -140,7 +145,7 @@ jobs:
             echo "removed it; the global credential below now applies"
 
             REWRITE_OK=0
-            for form in extraheader bare x-access-token; do
+            for form in bare extraheader x-access-token; do
               git config --global --remove-section "http.https://github.com/" 2>/dev/null || true
               git config --global --unset-all "url.https://x-access-token:${EVENTBUS_READ_PAT}@github.com/.insteadOf" 2>/dev/null || true
               git config --global --unset-all "url.https://${EVENTBUS_READ_PAT}@github.com/.insteadOf" 2>/dev/null || true

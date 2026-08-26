@@ -274,6 +274,11 @@ jobs:
         # concrete tenant to demonstrate it against. That tooling is never imported
         # by the package, which is where the rule actually applies.
         #
+        # config/ is excluded for the same reason and more deliberately still: since
+        # ADR-0016 the specialist routing table lives there and names tenants on
+        # purpose. That is the whole design - the vocabulary is data the package reads,
+        # never something the package contains.
+        #
         # *** THIS IS A DENYLIST. IT ONLY CATCHES TENANTS SOMEONE REMEMBERED TO ADD. ***
         #
         # It carried only the url-shortener's words from the day it was written until
@@ -283,9 +288,12 @@ jobs:
         #
         # Maintenance rule: **a tenant joining this platform adds its vocabulary here in
         # the same change.** If you are adding tenant #3, consider whether a denylist is
-        # still the right shape: once Track P1 lands config/scenario_specialists.yaml,
-        # these terms could be derived from the specialists actually configured, which
-        # would make a new tenant loud instead of silent.
+        # still the right shape: config/scenario_specialists.yaml now exists (ADR-0016)
+        # and names every routed tenant, so these terms could be derived from the
+        # specialists actually configured, which would make a new tenant loud instead of
+        # silent. Deliberately not done in ADR-0016's own change - it would make a green
+        # build depend on parsing a config file at lint time, which deserves its own
+        # decision rather than a side effect of landing the file.
         run: |
           # Tenant 1 - url-shortener-api.
           TENANT_1='url.?shorten|shortened|short.?url|qr.?code|click.analytics'

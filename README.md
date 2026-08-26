@@ -23,6 +23,7 @@ continuing.
   independently)
 - **Checkpointing**: langgraph-checkpoint-postgres 3.0.5 against its own `postgres:16-alpine`
 - **Events**: kafka-python-ng 2.2.3, `agentic-events` (shared envelope contract)
+- **Configuration**: PyYAML 6.0.3, for the specialist routing table
 - **Testing**: pytest 8.3.4, pytest-cov 7.1.0
 
 ## Architecture
@@ -264,6 +265,7 @@ Configuration:
 | `GIT_PAT_FILE` | — | Path to the PAT used to clone target repositories |
 | `WORKSPACES_ROOT` | `/workspaces` | Where per-run clones live |
 | `FIXTURES_DIR` | `/fixtures` | Replay-mode fixtures. Empty unless you mount your own — see below. |
+| `SPECIALIST_ROUTING_FILE` | `config/scenario_specialists.yaml` | Which generator handles which target, and with what model — see below |
 | `ORCHESTRATOR_MODE` | `replay` | `live` requires a `claude` CLI this image does not install |
 | `PUBLISH_MODE` | `none` | `none` / `branch` / `pull_request`. What happens to an approved change. Anything but `none` needs a **write-scoped** PAT — see [ADR 0012](docs/adr/0012-an-approved-change-must-outlive-the-run-that-made-it.md) |
 | `PARKED_RUN_TTL_HOURS` | `24` | After this, a parked run is reported `stale` and cleaned up |
@@ -288,6 +290,47 @@ branch the run cloned. The outcome event carries `commit_sha_after`, `published`
 A delivery failure does not fail the run — the change was generated, tested and approved either way
 — but it is reported on the outcome event, because a failed push means the change was discarded.
 See [ADR 0012](docs/adr/0012-an-approved-change-must-outlive-the-run-that-made-it.md).
+
+### Specialist and model routing
+
+Which generator produces code for a run, and with what model, comes from
+`config/scenario_specialists.yaml` rather than from the package. That file is the only place a
+tenant service is named at runtime; the resolver that reads it knows nothing about what is in it,
+which is what keeps the package domain-agnostic
+([ADR 0016](docs/adr/0016-specialist-and-model-routing-lives-in-configuration.md)).
+
+```yaml
+version: 1
+specialists:
+  default:                      # required, and must be `builtin`
+    kind: builtin
+    model: claude-sonnet-5
+    cli_timeout_seconds: 480
+  some-specialist:
+    kind: external              # a separately released tool, invoked as a subprocess
+    command: some-specialist
+    phases:
+      plan:
+        args: [plan]
+        requires:
+          executables: [claude]
+routes:
+  - scenario: a-label-for-the-audit-trail
+    repository: some-tenant-service
+    specialist: some-specialist
+```
+
+Routes match **the repository the run's workspace was cloned from** — the last path segment of its
+`origin` remote, minus any `.git`, case-insensitively. A target with no matching route, and a
+workspace with no remote at all, take `default`. Delete the file, or mount an empty path over it,
+and every run takes `default` with the values above.
+
+An external specialist's `requires` list is checked before anything is invoked, and what is absent
+is reported by name. This image is `python:3.12-slim` and carries no specialist runtime, so a
+specialist-capable deployment is a customised image rather than a config setting — the same posture
+live mode already has for the `claude` CLI. **Invoking an external specialist is not wired yet**: a
+run routed to one reaches a defined terminal state with a stated reason rather than falling back to
+the general-purpose generator below.
 
 ### Code generation modes
 

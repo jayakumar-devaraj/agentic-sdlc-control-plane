@@ -31,7 +31,7 @@ COPY requirements.txt .
 RUN --mount=type=secret,id=github_pat \
     sh -c ' \
         if [ -s /run/secrets/github_pat ]; then \
-            git config --global url."https://$(cat /run/secrets/github_pat)@github.com/".insteadOf "https://github.com/"; \
+            git config --global "url.https://x-access-token:$(cat /run/secrets/github_pat)@github.com/.insteadOf" "https://github.com/"; \
         fi && \
         pip install --no-cache-dir -r requirements.txt; \
         status=$?; \

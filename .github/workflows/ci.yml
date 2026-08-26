@@ -79,7 +79,13 @@ jobs:
           EVENTBUS_READ_PAT: ${{ secrets.EVENTBUS_READ_PAT }}
         run: |
           if [ -n "$EVENTBUS_READ_PAT" ]; then
-            git config --global url."https://${EVENTBUS_READ_PAT}@github.com/".insteadOf "https://github.com/"
+            # `x-access-token:<token>`, not a bare `<token>@`. The bare form puts the
+            # token in the *username* position with no password: classic PATs tolerate
+            # that, fine-grained PATs do not - and fine-grained is what this secret is
+            # specified to be. 080ffae used the bare form, so restoring it verbatim
+            # would have left a format bug that fails identically to an expired token
+            # and is much harder to tell apart from one.
+            git config --global "url.https://x-access-token:${EVENTBUS_READ_PAT}@github.com/.insteadOf" "https://github.com/"
             echo "EVENTBUS_READ_PAT is set - private eventbus will resolve"
             echo "PAT_SET=1" >> "$GITHUB_ENV"
           else

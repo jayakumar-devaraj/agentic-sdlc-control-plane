@@ -85,9 +85,38 @@ jobs:
         # name, including tenant specifics, because demonstrating a platform needs a
         # concrete tenant to demonstrate it against. That tooling is never imported
         # by the package, which is where the rule actually applies.
+        #
+        # *** THIS IS A DENYLIST. IT ONLY CATCHES TENANTS SOMEONE REMEMBERED TO ADD. ***
+        #
+        # It carried only the url-shortener's words from the day it was written until
+        # 2026-08-26, while this platform's second tenant - COBOL/mainframe modernization -
+        # had been live for months. A green build meant "no url-shortener vocabulary",
+        # never "domain-agnostic", and nothing about the green said which.
+        #
+        # Maintenance rule: **a tenant joining this platform adds its vocabulary here in
+        # the same change.** If you are adding tenant #3, consider whether a denylist is
+        # still the right shape: once Track P1 lands config/scenario_specialists.yaml,
+        # these terms could be derived from the specialists actually configured, which
+        # would make a new tenant loud instead of silent.
         run: |
-          if grep -rniE "url.?shorten|shortened|short.?url|qr.?code|click.analytics" \
-              agentic_control_plane/ tests/; then
+          # Tenant 1 - url-shortener-api.
+          TENANT_1='url.?shorten|shortened|short.?url|qr.?code|click.analytics'
+
+          # Tenant 2 - COBOL/mainframe modernization (cobol-modernizer, card-service).
+          #
+          # `pic` is the one that needs care and it took two tries. Matched only as a real
+          # picture clause - `PIC X(10)`, `PIC S9(9) COMP-3`, `PIC clause` - never bare and
+          # never as `pic(`: the first draft used `pic\s*\(`, which matched **"topic("** and
+          # failed the build on two existing test names. A guard that cries wolf gets
+          # switched off, which would be worse than the gap this step is closing. Word
+          # boundaries on the short acronyms for the same reason.
+          #
+          # Verified both directions before commit: eleven real COBOL forms caught, and
+          # "topic(", "typical picture", "epic", "pick a value", "os.path" and "graphics
+          # pipeline" all left alone.
+          TENANT_2='cobol|copybook|carddemo|mainframe|\bjcl\b|\bvsam\b|\bcics\b|\bpic\s+[9xsavnzp]|\bpic\s+clause|\bz/?os\b'
+
+          if grep -rniE "$TENANT_1|$TENANT_2" agentic_control_plane/ tests/; then
             echo "::error::tenant-specific vocabulary found in a domain-agnostic repo"
             exit 1
           fi

@@ -54,6 +54,33 @@ jobs:
           git config --global user.email "ci@local"
           git config --global user.name "CI"
 
+      - name: Assert the shared contract package is reachable
+        # `agentic-events` is pulled from agentic-sdlc-eventbus over **anonymous** HTTPS.
+        # ADR-0006 / commit 080ffae dropped the build-time PAT on that basis and the
+        # reason holds: this image handles a real PAT at runtime, so a build step that
+        # reintroduced one would ship it.
+        #
+        # The trade is that eventbus going private breaks this build - and pip reports it
+        # as `fatal: could not read Username for 'https://github.com'`, which names
+        # neither the repository nor the setting. That cost nine minutes and a wrong
+        # first diagnosis on 2026-08-26. This check costs about a second and names it.
+        run: |
+          URL=$(grep -oE 'https://github\.com/[^@]+\.git' requirements.txt | head -1)
+          echo "checking anonymous access to $URL"
+          # GIT_TERMINAL_PROMPT=0 so a private repo fails immediately instead of blocking
+          # on a username prompt - the same thing that makes pip's own error so unhelpful.
+          export GIT_TERMINAL_PROMPT=0
+          if git ls-remote "$URL" >/dev/null 2>&1; then
+            echo "reachable"
+          else
+            echo "::error::$URL is not readable anonymously - agentic-sdlc-eventbus is \
+          probably set to private. The dependency install below WILL fail with a \
+          misleading 'could not read Username' error. Fix: set that repository back to \
+          public. Reintroducing a build-time PAT is deliberately not the answer here - \
+          see requirements.txt and commit 080ffae."
+            exit 1
+          fi
+
       - name: Install dependencies
         run: pip install -r requirements.txt
 

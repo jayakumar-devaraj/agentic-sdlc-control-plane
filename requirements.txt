@@ -1,5 +1,21 @@
 # pydantic is pinned by agentic-events==0.1.0 (exact ==2.10.4); it is not a free
 # choice here. Bumping it requires re-releasing the shared contract package first.
+#
+# *** agentic-events RESOLVES OVER ANONYMOUS HTTPS, SO agentic-sdlc-eventbus MUST BE PUBLIC. ***
+#
+# ADR-0006 / commit 080ffae dropped the build-time PAT on exactly that basis, and the
+# reason not to reintroduce one still stands: this repo's image handles a real PAT at
+# *runtime* for clone-per-run, so a build step that reintroduced one would ship it.
+#
+# The cost of that trade is that flipping eventbus to private breaks this build, and pip
+# reports it as `fatal: could not read Username for 'https://github.com'` - which names
+# neither the repository nor the visibility setting that caused it. CI now runs a
+# pre-flight check that says so in one line; see "Assert the shared contract package is
+# reachable" in .github/workflows/ci.yml.
+#
+# The old `jayakumard10` owner below is a rename redirect and works. It is deliberately
+# not rewritten here: doing so while a build is red would confuse a redirect that works
+# with an auth failure that is the real cause.
 langgraph==1.2.9
 langgraph-checkpoint-postgres==3.0.5
 psycopg[binary]==3.2.3

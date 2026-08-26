@@ -1,10 +1,30 @@
 # pydantic is pinned by agentic-events==0.1.0 (exact ==2.10.4); it is not a free
 # choice here. Bumping it requires re-releasing the shared contract package first.
+#
+# *** agentic-events INSTALLS WHETHER agentic-sdlc-eventbus IS PUBLIC OR PRIVATE. ***
+#
+# Public  -> anonymous HTTPS, no credential anywhere.
+# Private -> EVENTBUS_READ_PAT, a fine-grained read-only PAT scoped to that repository,
+#            set as a repository secret. Optional: nothing fails when it is absent and
+#            the repo is public (ADR-0015).
+#
+# That is a deliberate reversal of commit 080ffae, which removed the build-time PAT on
+# the premise that eventbus "is public". The premise did not hold - visibility gets
+# toggled - and a build whose success depends on a setting nobody remembers is not a
+# build. 080ffae's actual *security* concern is preserved rather than overruled: the
+# image handles a real PAT at runtime, so the build credential is a BuildKit secret that
+# never becomes a layer, and `Assert the built image carries no credential` still checks
+# /root/.gitconfig is 0 bytes.
+#
+# The owner below was `jayakumard10` until 2026-08-26 - a rename redirect that resolved
+# correctly, so it was never the cause of anything. It is written out now for a narrower
+# reason: a fine-grained PAT is scoped to a repository, and asking one to authenticate
+# through a rename redirect adds a failure mode nobody needs while diagnosing access.
 langgraph==1.2.9
 langgraph-checkpoint-postgres==3.0.5
 psycopg[binary]==3.2.3
 pydantic==2.10.4
 kafka-python-ng==2.2.3
-agentic-events @ git+https://github.com/jayakumard10/agentic-sdlc-eventbus.git@v0.1.0
+agentic-events @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-eventbus.git@v0.1.0
 pytest==8.3.4
 pytest-cov==7.1.0

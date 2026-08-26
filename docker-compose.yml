@@ -26,6 +26,12 @@ services:
     image: agentic-sdlc-control-plane-consumer:latest
     build:
       context: .
+      # Optional build secret (ADR-0015). The Dockerfile skips it when the file is
+      # empty, so a public eventbus builds with no credential and a private one builds
+      # with a read-only PAT. The source file is secrets/github_pat.txt, which
+      # .gitignore excludes - only the .example template is ever tracked.
+      secrets:
+        - github_pat
     container_name: agentic-sdlc-control-plane-consumer
     depends_on:
       postgres:

@@ -78,7 +78,27 @@ jobs:
         env:
           EVENTBUS_READ_PAT: ${{ secrets.EVENTBUS_READ_PAT }}
         run: |
+          # Trim whitespace. A value pasted into `gh secret set` or the web UI can carry a
+          # trailing newline, which lands inside the URL and corrupts the credential in a
+          # way no error message explains.
+          EVENTBUS_READ_PAT=$(printf '%s' "$EVENTBUS_READ_PAT" | tr -d '[:space:]')
+
           if [ -n "$EVENTBUS_READ_PAT" ]; then
+            # Report what the token can actually see, in status codes only - never the
+            # token, never response bodies. This is the check that ends an argument:
+            #   /user   401 -> the value is not a valid token at all
+            #   /repos/... 200 -> it can read eventbus, so any later failure is not scope
+            #   /repos/... 404 -> valid token, no access to that repository
+            echo "--- what this token can see (status codes only) ---"
+            code_user=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${EVENTBUS_READ_PAT}" https://api.github.com/user)
+            code_repo=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${EVENTBUS_READ_PAT}" \
+              https://api.github.com/repos/jayakumar-devaraj/agentic-sdlc-eventbus)
+            echo "GET /user                                  -> $code_user"
+            echo "GET /repos/jayakumar-devaraj/agentic-...   -> $code_repo"
+            echo "token length: ${#EVENTBUS_READ_PAT}"
+
             # `x-access-token:<token>`, not a bare `<token>@`. The bare form puts the
             # token in the *username* position with no password: classic PATs tolerate
             # that, fine-grained PATs do not - and fine-grained is what this secret is

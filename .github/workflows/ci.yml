@@ -95,9 +95,28 @@ jobs:
             code_repo=$(curl -s -o /dev/null -w '%{http_code}' \
               -H "Authorization: Bearer ${EVENTBUS_READ_PAT}" \
               https://api.github.com/repos/jayakumar-devaraj/agentic-sdlc-eventbus)
-            echo "GET /user                                  -> $code_user"
-            echo "GET /repos/jayakumar-devaraj/agentic-...   -> $code_repo"
+            # **/repos needs only Metadata:Read. /contents needs Contents:Read, which is
+            # what git clone actually requires.** A token holding Metadata but not
+            # Contents answers 200 here and "Repository not found" to git - the exact
+            # contradiction that sent this chase through three wrong diagnoses. So the
+            # permission git needs is probed directly rather than inferred from the one
+            # that is easier to check.
+            code_contents=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${EVENTBUS_READ_PAT}" \
+              https://api.github.com/repos/jayakumar-devaraj/agentic-sdlc-eventbus/contents/)
+            echo "GET /user                                  -> $code_user   (token valid at all?)"
+            echo "GET /repos/...                             -> $code_repo   (Metadata: Read)"
+            echo "GET /repos/.../contents/                   -> $code_contents   (Contents: Read <- git needs THIS)"
             echo "token length: ${#EVENTBUS_READ_PAT}"
+
+            if [ "$code_repo" = "200" ] && [ "$code_contents" != "200" ]; then
+              echo "::error::The token has Metadata: Read but NOT Contents: Read. Git clone \
+          requires Contents, which is why the API can see this repository and git cannot. On \
+          the token's page the setting is 'Repository permissions > Contents: Read-only' - if \
+          it already appears set, it was most likely never saved, since editing a \
+          fine-grained token requires pressing Save on that section specifically."
+              exit 1
+            fi
 
             # **Pick the credential form by testing it, not by believing something about
             # it.** An earlier version asserted that fine-grained PATs reject the bare

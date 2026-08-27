@@ -89,6 +89,8 @@ def specialist_graph_factory(
             tenant_repo=workspace_path,
             output_repo=output_path,
             checkpointer=checkpointer,
+            output_repository=resolution.output_repository,
+            output_branch=resolution.output_branch,
         )
 
     return factory

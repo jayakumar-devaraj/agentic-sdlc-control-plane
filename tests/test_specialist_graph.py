@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from langgraph.types import Command
 
+from agentic_control_plane import tools
 from agentic_control_plane.checkpointer import build_memory_checkpointer
 from agentic_control_plane.specialist_graph import (
     DESIGN_ARTIFACT_NAME,
@@ -348,3 +349,238 @@ def test_generate_called_without_a_design_refuses_rather_than_crashing(tmp_path:
     assert result["run_status"] == "failed"
     assert any("no design phase result" in event.detail for event in result["events"])
     assert not output_repo.exists()
+
+
+# --- publishing: the only point at which anything leaves the run -------------------
+
+
+@pytest.fixture()
+def target_project(tmp_path: Path) -> Path:
+    """A real bare-ish origin the graph can clone and push to."""
+    import subprocess
+
+    from agentic_control_plane import tools
+
+    origin = tmp_path / "target-project"
+    tools.write_code_files(origin, {"README.md": "the project generated code lands in\n"})
+    tools.git_commit_all(origin, "initial")
+    subprocess.run(["git", "branch", "-M", "main"], cwd=origin, check=True, capture_output=True)
+    # Pushing to a non-bare repo's checked-out branch is refused by git; this run pushes to its
+    # own branch, so only that needs to be allowed.
+    subprocess.run(
+        ["git", "config", "receive.denyCurrentBranch", "ignore"],
+        cwd=origin, check=True, capture_output=True,
+    )
+    return origin
+
+
+def publishing_graph(tmp_path: Path, paths, target: Path, saver=None, generate=GENERATE_BODY):
+    tenant_repo, output_repo = paths
+    return build_specialist_graph(
+        specialist=write_specialist(tmp_path, DESIGN_BODY, generate),
+        tenant_repo=tenant_repo,
+        output_repo=output_repo,
+        checkpointer=saver or build_memory_checkpointer(),
+        output_repository=str(target),
+        output_branch="main",
+    )
+
+
+def approve_through_design(graph):
+    graph.invoke(initial(), config())
+    return graph.invoke(Command(resume={"status": "approved"}), config())
+
+
+def test_generate_clones_the_target_project_and_writes_into_it(
+    tmp_path: Path, paths, target_project: Path
+):
+    tenant_repo, output_repo = paths
+    graph = publishing_graph(tmp_path, paths, target_project)
+    parked = approve_through_design(graph)
+
+    # The checkout is real, and carries the target project's own history.
+    assert (output_repo / ".git").is_dir()
+    assert (output_repo / "README.md").is_file()
+    assert (output_repo / "Generated.java").is_file()
+    # And it has parked on the release gate rather than finishing.
+    assert parked["__interrupt__"][0].value["gate_type"] == "merge_release_approval"
+
+
+def test_the_release_gate_shows_what_would_be_published(
+    tmp_path: Path, paths, target_project: Path
+):
+    graph = publishing_graph(tmp_path, paths, target_project)
+    payload = approve_through_design(graph)["__interrupt__"][0].value
+
+    assert payload["output_repository"] == str(target_project)
+    assert payload["output_branch"] == "main"
+    assert "Generated.java" in payload["files"]
+    assert payload["generated"]["steps_compiled"] == 2
+
+
+def test_nothing_is_committed_until_the_release_gate_approves(
+    tmp_path: Path, paths, target_project: Path
+):
+    """The reason this graph needs no rollback: an unapproved run leaves the target project
+
+    exactly as it found it, and a failed generate leaves an untouched checkout rather than a
+    reverted one.
+    """
+    from agentic_control_plane import tools
+
+    tenant_repo, output_repo = paths
+    graph = publishing_graph(tmp_path, paths, target_project)
+    approve_through_design(graph)
+
+    head_before = tools.git_current_commit(output_repo)
+    assert tools._run_git(output_repo, "status", "--porcelain"), "generated files are uncommitted"
+
+    final = graph.invoke(Command(resume={"status": "rejected"}), config())
+
+    assert final["run_status"] == "completed"
+    assert final["published"] is False
+    # `.get`, not `[...]`: a channel no node ever wrote and whose default is None is absent from
+    # the returned mapping rather than present-and-None. Absent and None mean the same thing here
+    # and the assertion below is the one that actually settles it.
+    assert final.get("commit_sha_after") is None
+    assert tools.git_current_commit(output_repo) == head_before, "nothing was committed"
+
+
+def test_approval_commits_and_reports_what_publish_mode_did(
+    tmp_path: Path, paths, target_project: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """PUBLISH_MODE defaults to `none`: the change is committed and reported, never pushed.
+
+    Governance without delivery, the same default the SDLC path has (ADR-0012).
+    """
+    from agentic_control_plane import tools
+
+    monkeypatch.delenv("PUBLISH_MODE", raising=False)
+    tenant_repo, output_repo = paths
+    graph = publishing_graph(tmp_path, paths, target_project)
+    approve_through_design(graph)
+
+    final = graph.invoke(Command(resume={"status": "approved"}), config())
+
+    assert final["run_status"] == "completed"
+    assert final["commit_sha_after"] == tools.git_current_commit(output_repo)
+    assert final["published"] is False
+    assert "none" in final["publish_detail"]
+    assert final["gates"]["merge_release_approval"].status == "approved"
+
+
+def test_branch_mode_pushes_the_generated_change_to_its_own_branch(
+    tmp_path: Path, paths, target_project: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The irreversible half, exercised against a real remote rather than reasoned about."""
+    from agentic_control_plane import publish, tools
+
+    monkeypatch.setenv("PUBLISH_MODE", "branch")
+    graph = publishing_graph(tmp_path, paths, target_project)
+    approve_through_design(graph)
+
+    final = graph.invoke(Command(resume={"status": "approved"}), config())
+
+    assert final["published"] is True
+    expected = publish.branch_name("run-1")
+    assert final["publish_branch"] == expected
+    landed = tools._run_git(target_project, "branch", "--list", expected)
+    assert expected in landed, "the branch must exist on the target project"
+    # The branch the run cloned is untouched.
+    assert tools._run_git(target_project, "rev-parse", "main") != final["commit_sha_after"]
+
+
+def test_a_route_with_no_output_repository_still_runs_and_publishes_nothing(
+    tmp_path: Path, paths
+):
+    """Unchanged behaviour for a route that names nowhere to write."""
+    tenant_repo, output_repo = paths
+    graph = compile_graph(tmp_path, paths)
+    graph.invoke(initial(), config())
+    final = graph.invoke(Command(resume={"status": "approved"}), config())
+
+    assert final["run_status"] == "completed"
+    assert final["published"] is False
+    assert final["output_repository"] == ""
+    assert (output_repo / "Generated.java").is_file()
+    assert not (output_repo / ".git").exists()
+
+
+def test_an_unreachable_target_project_fails_before_the_specialist_runs(
+    tmp_path: Path, paths
+):
+    tenant_repo, output_repo = paths
+    graph = build_specialist_graph(
+        specialist=write_specialist(tmp_path, DESIGN_BODY, GENERATE_BODY),
+        tenant_repo=tenant_repo,
+        output_repo=output_repo,
+        checkpointer=build_memory_checkpointer(),
+        output_repository=str(tmp_path / "no-such-project"),
+        output_branch="main",
+    )
+    graph.invoke(initial(), config())
+    final = graph.invoke(Command(resume={"status": "approved"}), config())
+
+    assert final["safe_stop"] is True
+    assert final["run_status"] == "failed"
+    assert not (output_repo / "Generated.java").exists()
+
+
+def test_an_existing_checkout_is_reused_rather_than_re_cloned(
+    tmp_path: Path, paths, target_project: Path
+):
+    """A design was approved against a particular state of the world; silently replacing the
+
+    checkout mid-run would discard that.
+    """
+    tenant_repo, output_repo = paths
+    graph = publishing_graph(tmp_path, paths, target_project)
+    approve_through_design(graph)
+
+    marker = output_repo / "left-by-a-previous-slice.txt"
+    marker.write_text("still here", encoding="utf-8")
+
+    from agentic_control_plane.specialist_graph import ensure_output_checkout
+
+    ensure_output_checkout(output_repo, str(target_project), "main")
+    assert marker.is_file()
+
+
+def test_the_file_list_is_empty_when_there_is_no_output_directory(tmp_path: Path):
+    from agentic_control_plane.specialist_graph import _generated_file_names
+
+    assert _generated_file_names(tmp_path / "never-created") == []
+
+
+def test_a_commit_that_fails_stops_the_run_rather_than_reporting_a_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """git is stubbed to fail, because it will not fail on its own here: `git_commit_all`
+
+    initialises a repository when handed a plain directory, so an absent checkout commits
+    happily. What this branch actually guards is git failing for its own reasons - an index
+    lock, a timeout, a corrupt object - and the property under test is that such a run stops
+    rather than reporting a publish of a commit that does not exist.
+    """
+    from agentic_control_plane import specialist_graph
+    from agentic_control_plane.specialist_graph import publish_node
+
+    def refuse(workspace, message):
+        raise tools.GitOperationError("git index.lock exists")
+
+    monkeypatch.setattr(specialist_graph.tools, "git_commit_all", refuse)
+
+    def must_not_run(**kwargs):
+        raise AssertionError("nothing may be published when the commit failed")
+
+    monkeypatch.setattr(specialist_graph.publish, "publish_change", must_not_run)
+
+    state = initial()
+    state.output_repository = "https://example.invalid/o/target.git"
+
+    result = publish_node(state, output_repo=tmp_path)
+
+    assert result["safe_stop"] is True
+    assert result["run_status"] == "failed"
+    assert "published" not in result
+    assert any("index.lock" in event.detail for event in result["events"])

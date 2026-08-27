@@ -128,6 +128,14 @@ class Route(BaseModel):
     repository: str = Field(min_length=1)
     specialist: str = Field(min_length=1)
 
+    #: Where generated code is written - a *different* project from the one matched above, which
+    #: is read-only for the whole run (ADR-0009). Optional: a route without one still runs, and
+    #: its specialist writes to a local directory that is never published. That is the honest
+    #: default, because publishing to a repository nobody named is the one mistake here that
+    #: cannot be undone by deleting a directory.
+    output_repository: str | None = None
+    output_branch: str = "main"
+
 
 class RoutingTable(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -138,11 +146,15 @@ class RoutingTable(BaseModel):
 
 
 class Resolution(BaseModel):
-    """Which specialist a run got, under which name, and why."""
+    """Which specialist a run got, under which name, why, and where its output belongs."""
 
     scenario: str = ""
     name: str
     specialist: Specialist
+    #: Copied from the matched route so a caller never has to hold the route as well. Empty on
+    #: the default resolution, which is what "nothing is published" looks like.
+    output_repository: str | None = None
+    output_branch: str = "main"
 
 
 def default_routing_table() -> RoutingTable:
@@ -265,6 +277,8 @@ def resolve(table: RoutingTable, repository: str | None) -> Resolution:
                     scenario=route.scenario,
                     name=route.specialist,
                     specialist=table.specialists[route.specialist],
+                    output_repository=route.output_repository,
+                    output_branch=route.output_branch,
                 )
     return Resolution(
         name=DEFAULT_SPECIALIST, specialist=table.specialists[DEFAULT_SPECIALIST]

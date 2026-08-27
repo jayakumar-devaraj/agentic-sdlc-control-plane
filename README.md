@@ -438,5 +438,35 @@ kept as a regression guard, because this is the image that handles a real PAT at
 not run the consumer: this repo is independently clonable with no sibling checkout, so there is no
 broker in CI to point it at.
 
-Neither job needs a repository secret. `agentic-events` resolves over anonymous HTTPS from the
-public `agentic-sdlc-eventbus` repo, and CI never performs a real clone.
+The specialist-image job builds both images and checks them against each other. It asserts the
+**default** image carries no `java`, `mvn` or `claude` — that one matters more than its opposite,
+because if a future change moves the JDK into the default `Dockerfile` everything downstream still
+passes and the decision is silently gone. It then asserts the specialist image reports the *pinned*
+versions rather than merely having the tools, and reports both image sizes without gating on them.
+
+No job needs a repository secret. `agentic-events` resolves anonymously while `agentic-sdlc-eventbus`
+is public and through the optional `EVENTBUS_READ_PAT` when it is not
+([ADR 0015](docs/adr/0015-the-build-works-whether-the-contract-repo-is-public-or-private.md)), and
+CI never performs a real clone.
+
+### Running a specialist
+
+`Dockerfile.specialist` builds a second image on top of the default one, adding what an external
+specialist needs: a pinned JDK, a matching Maven, and the `claude` CLI. The default image
+deliberately carries none of it — most runs resolve to the built-in generator, and a specialist-
+capable deployment is a customised image rather than a setting
+([ADR 0017](docs/adr/0017-a-specialist-capable-image-is-a-second-image.md)).
+
+```bash
+docker build -t agentic-sdlc-control-plane-consumer:latest .
+docker build -f Dockerfile.specialist -t agentic-sdlc-control-plane-specialist:latest   --build-arg SPECIALIST_REQUIREMENT="<package> @ git+<url>@<tag>" .
+```
+
+Omit `SPECIALIST_REQUIREMENT` to build the runtime without any specialist installed, which is what
+CI does — a green build should not depend on another repository's tag resolving.
+
+**Two things the image cannot provide.** `claude -p` needs an authenticated session, which is
+per-operator and is mounted at runtime, so the preflight passing means the CLI is on `PATH` and not
+that a call will succeed. And the generating phase needs a Docker daemon, which this image does not
+run — mount the host's socket, understanding that doing so is effectively granting root on the
+host. Both are covered in ADR 0017.

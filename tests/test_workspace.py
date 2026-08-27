@@ -274,3 +274,44 @@ def test_total_size_reports_bytes_actually_on_disk(origin_repo: Path, workspaces
 
     assert workspace.total_size_bytes() > 0
     assert workspace.total_size_bytes(["no-such-run"]) == 0
+
+
+def test_clone_repository_writes_where_it_is_told_not_under_the_workspaces_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A run's second clone - the project a specialist writes into - lives outside
+
+    WORKSPACES_ROOT, so it cannot be addressed by run id the way the workspace can.
+    """
+    monkeypatch.setenv("WORKSPACES_ROOT", str(tmp_path / "workspaces"))
+    origin = tmp_path / "origin"
+    tools.write_code_files(origin, {"README.md": "target project\n"})
+    tools.git_commit_all(origin, "initial")
+    subprocess.run(["git", "branch", "-M", "main"], cwd=origin, check=True, capture_output=True)
+
+    destination = tmp_path / "elsewhere" / "run-1"
+    result = workspace.clone_repository(destination, str(origin), "main")
+
+    assert result == destination
+    assert (destination / "README.md").is_file()
+    assert workspace.workspaces_root().resolve() not in destination.resolve().parents
+
+
+def test_a_failed_second_clone_does_not_delete_the_run_s_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The bug the shared cleanup would have had: the failure paths used to remove the
+
+    workspace by run id, which is the wrong tree entirely once a run has two clones.
+    """
+    monkeypatch.setenv("WORKSPACES_ROOT", str(tmp_path / "workspaces"))
+    survivor = workspace.workspace_for("run-1")
+    tools.write_code_files(survivor, {"kept.py": "x = 1\n"})
+
+    with pytest.raises(workspace.CloneError):
+        workspace.clone_repository(
+            tmp_path / "elsewhere" / "run-1", str(tmp_path / "no-such-repo"), "main"
+        )
+
+    assert (survivor / "kept.py").is_file(), "the run's own workspace must be untouched"
+    assert not (tmp_path / "elsewhere" / "run-1").exists()

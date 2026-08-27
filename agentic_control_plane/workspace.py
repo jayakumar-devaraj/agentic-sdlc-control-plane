@@ -103,6 +103,22 @@ def clone_for_run(run_id: str, repo_url: str, branch: str) -> tuple[Path, str | 
         # what state the previous attempt got to.
         logger.warning("Workspace %s already exists, removing before re-clone", destination)
         cleanup(run_id)
+    return clone_repository(destination, repo_url, branch), tools.git_current_commit(destination)
+
+
+def clone_repository(destination: Path, repo_url: str, branch: str) -> Path:
+    """Clone `branch` of `repo_url` to an arbitrary path.
+
+    Split out of `clone_for_run` when a run gained a **second** repository: a specialist writes
+    generated code into a different project from the one it reads (ADR-0009), and that clone lives
+    outside `WORKSPACES_ROOT` on purpose, so it cannot be addressed by run id the way the
+    workspace can.
+
+    The credential handling is the whole reason this is shared rather than reimplemented: the
+    token is never in the URL, never in `.git/config`, and never in an error message - see this
+    module's docstring. A second clone path that got that subtly wrong would be a credential leak
+    nobody would notice until it was in a log.
+    """
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     command = [
@@ -117,32 +133,33 @@ def clone_for_run(run_id: str, repo_url: str, branch: str) -> tuple[Path, str | 
         repo_url,
         str(destination),
     ]
-    logger.info("Cloning %s (branch %s) for run %s", repo_url, branch, run_id)
+    logger.info("Cloning %s (branch %s) into %s", repo_url, branch, destination)
     try:
         proc = subprocess.run(
             command, capture_output=True, text=True, timeout=_CLONE_TIMEOUT_SECONDS
         )
     except subprocess.TimeoutExpired as exc:
-        cleanup(run_id)
+        _remove(destination)
         raise CloneError(
             f"git clone of {repo_url} timed out after {_CLONE_TIMEOUT_SECONDS}s"
         ) from exc
 
     if proc.returncode != 0:
-        cleanup(run_id)
+        _remove(destination)
         raise CloneError(
             f"git clone of {repo_url} (branch {branch}) failed: "
             f"{_redact(proc.stderr.strip())}"
         )
 
     _configure_commit_identity(destination)
-    commit_sha_before = tools.git_current_commit(destination)
     logger.info(
-        "Run %s workspace ready at %s (commit %s)",
-        run_id,
+        "Cloned %s (branch %s) to %s at commit %s",
+        repo_url,
+        branch,
         destination,
-        (commit_sha_before or "unknown")[:8],
+        (tools.git_current_commit(destination) or "unknown")[:8],
     )
+    return destination
     return destination, commit_sha_before
 
 
@@ -172,11 +189,16 @@ def _configure_commit_identity(destination: Path) -> None:
         )
 
 
-def cleanup(run_id: str) -> None:
-    """Delete a run's workspace. Safe to call when it does not exist."""
-    destination = workspace_for(run_id)
+def _remove(destination: Path) -> None:
+    """Delete a cloned tree. Safe to call when it does not exist.
+
+    Shared by `cleanup` and by the clone failure paths, which used to call `cleanup(run_id)` -
+    correct while every clone lived under `WORKSPACES_ROOT`, and wrong the moment a run gained a
+    second clone somewhere else: a failed output clone would have deleted the run's *workspace*.
+    """
     if not destination.exists():
         return
+
     # Cloned git objects are read-only on Windows, which makes rmtree fail on the
     # .git directory unless the permission is cleared first. `onexc` rather than the
     # older `onerror`, which is deprecated as of the Python version this pins.
@@ -185,6 +207,14 @@ def cleanup(run_id: str) -> None:
         func(path)
 
     shutil.rmtree(destination, onexc=_on_exc)
+
+
+def cleanup(run_id: str) -> None:
+    """Delete a run's workspace. Safe to call when it does not exist."""
+    destination = workspace_for(run_id)
+    if not destination.exists():
+        return
+    _remove(destination)
     logger.info("Removed workspace for run %s", run_id)
 
 

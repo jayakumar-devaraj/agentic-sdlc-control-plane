@@ -10,16 +10,30 @@ time a fixture is captured or --live mode is demoed.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from agentic_control_plane import specialists, tools
+from agentic_control_plane.nodes import coder as coder_module
 from agentic_control_plane.nodes.coder import (
     _available_dependencies_note,
     _build_prompt,
     _extract_json_object,
     _task_plan_note,
     coder,
+)
+from agentic_control_plane.specialists import (
+    DEFAULT_CLI_TIMEOUT_SECONDS,
+    DEFAULT_MODEL,
+    BuiltinSpecialist,
+    ExternalSpecialist,
+    Route,
+    RoutingTable,
+    RuntimeRequirements,
+    SpecialistPhase,
+    default_routing_table,
 )
 from agentic_control_plane.state import ArchitectureDesign, GraphState, Task
 
@@ -218,3 +232,209 @@ def test_build_prompt_includes_prior_test_failures(tmp_path: Path):
     )
     prompt = _build_prompt(state, tmp_path)
     assert "FAILED tests/test_x.py::test_thing" in prompt
+
+
+# --- specialist and model routing (ADR-0016) --------------------------------------
+#
+# Every table below is synthetic and its vocabulary invented: CI fails the build when
+# `tests/` carries a tenant's words, which is the same rule that put the real routing
+# table in `config/` rather than in the package.
+
+
+def builtin_table(model: str = "some-model-id", timeout: int = 42) -> RoutingTable:
+    return RoutingTable(
+        specialists={"default": BuiltinSpecialist(model=model, cli_timeout_seconds=timeout)}
+    )
+
+
+def external_table(repository: str = "widget-service") -> RoutingTable:
+    return RoutingTable(
+        specialists={
+            "default": BuiltinSpecialist(),
+            "widget-migrator": ExternalSpecialist(
+                kind="external",
+                command="widget-migrator",
+                phases={
+                    "plan": SpecialistPhase(
+                        args=["plan"], requires=RuntimeRequirements(executables=["some-cli"])
+                    )
+                },
+            ),
+        },
+        routes=[
+            Route(
+                scenario="widget-modernisation",
+                repository=repository,
+                specialist="widget-migrator",
+            )
+        ],
+    )
+
+
+def test_replay_records_which_specialist_the_run_resolved_to(
+    fixture_dir: Path, workspace: Path
+):
+    """A replayed run still says how it was routed - that is what makes it auditable."""
+    state = GraphState(scenario_type="brownfield", requirement_raw="x", mode="replay")
+    result = coder(state, workspace=workspace, fixtures_dir=fixture_dir)
+    assert "specialist 'default'" in result["events"][0].detail
+
+
+def test_live_uses_the_model_and_timeout_the_table_gives_it(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The two values that used to be module constants now come from configuration."""
+    captured: dict = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["timeout"] = kwargs["timeout"]
+        return subprocess.CompletedProcess(
+            argv,
+            returncode=0,
+            stdout=json.dumps(
+                {"subtype": "success", "result": json.dumps({"app/x.py": "x = 1\n"})}
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(coder_module.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(coder_module.subprocess, "run", fake_run)
+
+    state = GraphState(scenario_type="greenfield", requirement_raw="x", mode="live")
+    result = coder(
+        state,
+        workspace=workspace,
+        fixtures_dir=workspace,
+        routing_table=builtin_table(model="some-model-id", timeout=42),
+    )
+
+    assert captured["argv"][captured["argv"].index("--model") + 1] == "some-model-id"
+    assert captured["timeout"] == 42
+    assert result["coder"].code_files == {"app/x.py": "x = 1\n"}
+    assert "'default'" in result["coder"].rationale
+
+
+def test_an_unconfigured_deployment_still_uses_the_historical_model(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The regression this refactor could plausibly cause, pinned against its own defaults."""
+    captured: dict = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["timeout"] = kwargs["timeout"]
+        return subprocess.CompletedProcess(
+            argv,
+            returncode=0,
+            stdout=json.dumps({"subtype": "success", "result": json.dumps({"a.py": "x = 1\n"})}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(coder_module.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(coder_module.subprocess, "run", fake_run)
+
+    state = GraphState(scenario_type="greenfield", requirement_raw="x", mode="live")
+    coder(
+        state,
+        workspace=workspace,
+        fixtures_dir=workspace,
+        routing_table=default_routing_table(),
+    )
+
+    assert captured["argv"][captured["argv"].index("--model") + 1] == DEFAULT_MODEL
+    assert captured["timeout"] == DEFAULT_CLI_TIMEOUT_SECONDS
+
+
+def test_routing_matches_the_repository_the_workspace_was_cloned_from(workspace: Path):
+    tools.git_init_if_needed(workspace)
+    tools._run_git(
+        workspace, "remote", "add", "origin", "https://example.invalid/o/widget-service.git"
+    )
+
+    state = GraphState(scenario_type="greenfield", requirement_raw="x", mode="live")
+    result = coder(
+        state,
+        workspace=workspace,
+        fixtures_dir=workspace,
+        routing_table=external_table(),
+    )
+
+    assert result["safe_stop"] is True
+    assert "widget-migrator" in result["coder"].rationale
+
+
+def test_a_workspace_with_no_remote_takes_the_default(
+    fixture_dir: Path, workspace: Path
+):
+    """A fresh `git init` is an unidentified target, and gets the general-purpose generator."""
+    tools.git_init_if_needed(workspace)
+    state = GraphState(scenario_type="brownfield", requirement_raw="x", mode="replay")
+    result = coder(
+        state, workspace=workspace, fixtures_dir=fixture_dir, routing_table=external_table()
+    )
+    assert "specialist 'default'" in result["events"][0].detail
+
+
+def test_a_missing_specialist_runtime_is_named_rather_than_thrown_as_an_errno(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(specialists.shutil, "which", lambda name: None)
+    tools.git_init_if_needed(workspace)
+    tools._run_git(
+        workspace, "remote", "add", "origin", "https://example.invalid/o/widget-service.git"
+    )
+
+    state = GraphState(scenario_type="greenfield", requirement_raw="x", mode="live")
+    result = coder(
+        state, workspace=workspace, fixtures_dir=workspace, routing_table=external_table()
+    )
+
+    assert result["safe_stop"] is True
+    assert result["run_status"] == "failed"
+    assert "some-cli" in result["coder"].rationale
+    assert "customised image" in result["coder"].rationale
+
+
+def test_a_routed_run_stops_rather_than_falling_back_to_the_builtin_generator(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The failure mode this refuses: a target routed away from the general-purpose
+
+    generator quietly receiving its output anyway, committed through a release gate,
+    with nothing in the audit trail saying the routing never happened.
+    """
+    monkeypatch.setattr(specialists.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def explode(*args, **kwargs):
+        raise AssertionError("the built-in generator must not run for a routed target")
+
+    monkeypatch.setattr(coder_module, "_invoke_claude_cli", explode)
+    tools.git_init_if_needed(workspace)
+    tools._run_git(
+        workspace, "remote", "add", "origin", "https://example.invalid/o/widget-service.git"
+    )
+
+    state = GraphState(scenario_type="greenfield", requirement_raw="x", mode="live")
+    result = coder(
+        state, workspace=workspace, fixtures_dir=workspace, routing_table=external_table()
+    )
+
+    assert result["safe_stop"] is True
+    assert "not wired yet" in result["coder"].rationale
+    assert result["coder"].code_files == {}
+    assert list(workspace.glob("*.py")) == []
+
+
+def test_a_broken_routing_table_safe_stops_rather_than_crashing_the_run(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+):
+    bad = workspace.parent / "broken.yaml"
+    bad.write_text("version: 1\nspecialists: {}\n", encoding="utf-8")
+    monkeypatch.setenv("SPECIALIST_ROUTING_FILE", str(bad))
+
+    state = GraphState(scenario_type="brownfield", requirement_raw="x", mode="replay")
+    result = coder(state, workspace=workspace, fixtures_dir=workspace)
+
+    assert result["safe_stop"] is True
+    assert "defines no 'default'" in result["coder"].rationale

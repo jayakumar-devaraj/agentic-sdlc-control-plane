@@ -7,6 +7,17 @@ anywhere in this system) and parses its `--output-format json` response. Replay 
 reads a previously captured fixture instead. Both paths converge on the same output
 shape (`CoderOutput`), so downstream nodes never need to know which one ran.
 
+**Which generator runs, and with which model, is resolved from configuration rather
+than hardcoded here** (ADR-0016). The model id and the CLI timeout used to be module
+constants; they are now the values of the routing table's `default` entry, and the
+defaults in `specialists.py` are those same constants, so a deployment that configures
+nothing behaves exactly as it did. A target the table routes elsewhere resolves to an
+external specialist - a separately released tool with its own subcommands - and
+invoking one is not wired yet: such a run stops with a stated reason rather than
+falling back to this generator, because a tenant routed to a specialist because a
+general-purpose model cannot do its work must not silently receive a general-purpose
+model's output.
+
 Neither mode is available by default in the shipped container image, and that is
 deliberate rather than an omission:
 
@@ -33,19 +44,24 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agentic_control_plane import tools
+from agentic_control_plane import specialists, tools
+from agentic_control_plane.specialists import (
+    BuiltinSpecialist,
+    ExternalSpecialist,
+    Resolution,
+    RoutingTable,
+)
 from agentic_control_plane.state import AuditEvent, CoderOutput, GraphState
 
 logger = logging.getLogger(__name__)
 
-CLAUDE_MODEL = "claude-sonnet-5"
-# 300s was too tight for a retry prompt covering several files - observed a genuine
-# timeout (not a hang) during brownfield fixture capture.
-CLAUDE_CLI_TIMEOUT_SECONDS = 480
-
 
 class FixtureNotFoundError(RuntimeError):
     """Raised in replay mode when no recorded fixture matches the current run."""
+
+
+class SpecialistNotWiredError(RuntimeError):
+    """Raised when a run resolves to an external specialist, which nothing invokes yet."""
 
 
 def _available_dependencies_note(workspace: Path) -> str | None:
@@ -177,13 +193,15 @@ def _require_claude_cli() -> None:
         )
 
 
-def _invoke_claude_cli_once(prompt: str, workspace: Path) -> dict[str, str]:
+def _invoke_claude_cli_once(
+    prompt: str, workspace: Path, generator: BuiltinSpecialist
+) -> dict[str, str]:
     proc = subprocess.run(
-        ["claude", "-p", prompt, "--model", CLAUDE_MODEL, "--output-format", "json"],
+        ["claude", "-p", prompt, "--model", generator.model, "--output-format", "json"],
         cwd=workspace,
         capture_output=True,
         text=True,
-        timeout=CLAUDE_CLI_TIMEOUT_SECONDS,
+        timeout=generator.cli_timeout_seconds,
     )
     if proc.returncode != 0:
         raise RuntimeError(f"claude CLI exited {proc.returncode}: {proc.stderr.strip()}")
@@ -198,7 +216,9 @@ def _invoke_claude_cli_once(prompt: str, workspace: Path) -> dict[str, str]:
     return code_files
 
 
-def _invoke_claude_cli(prompt: str, workspace: Path) -> dict[str, str]:
+def _invoke_claude_cli(
+    prompt: str, workspace: Path, generator: BuiltinSpecialist
+) -> dict[str, str]:
     """Wraps the raw CLI call with a small bounded retry.
 
     Observed during development: the `claude` CLI occasionally returns an empty or
@@ -218,8 +238,14 @@ def _invoke_claude_cli(prompt: str, workspace: Path) -> dict[str, str]:
     last_error: Exception | None = None
     for attempt in range(1, _CLI_CALL_ATTEMPTS + 1):
         try:
-            logger.info("Invoking claude CLI in %s (attempt %d/%d)", workspace, attempt, _CLI_CALL_ATTEMPTS)
-            return _invoke_claude_cli_once(prompt, workspace)
+            logger.info(
+                "Invoking claude CLI (%s) in %s (attempt %d/%d)",
+                generator.model,
+                workspace,
+                attempt,
+                _CLI_CALL_ATTEMPTS,
+            )
+            return _invoke_claude_cli_once(prompt, workspace, generator)
         except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
             last_error = exc
             logger.warning("claude CLI call failed (attempt %d/%d): %s", attempt, _CLI_CALL_ATTEMPTS, exc)
@@ -272,15 +298,64 @@ _FIXTURE_FAILURE_TYPES = (
 )
 
 
-def coder(state: GraphState, workspace: Path, fixtures_dir: Path) -> dict:
+def _resolve_route(workspace: Path, routing_table: RoutingTable | None) -> Resolution:
+    """Which specialist this run is routed to, from the target it is working on.
+
+    The workspace is a clone of the tenant service that triggered the run, so its
+    origin remote is the identity to route on - already present here, needing no new
+    field on GraphState and no change to the event contract (ADR-0016).
+    """
+    table = routing_table if routing_table is not None else specialists.load_routing_table()
+    repository = specialists.repository_name(tools.git_remote_url(workspace))
+    return specialists.resolve(table, repository)
+
+
+def _generate_live(state: GraphState, workspace: Path, route: Resolution) -> dict[str, str]:
+    """Run the resolved generator, or explain why this deployment cannot.
+
+    An external specialist gets its declared runtime checked before anything else,
+    because on the shipped `python:3.12-slim` image that is the case that actually
+    happens and it deserves a named cause rather than an errno. Invoking one is a
+    later change; until then the run stops here (ADR-0016 § 5).
+
+    **Every phase is checked, not the one about to run**, because at this point there
+    is no such thing: a specialist's phases are a sequence a run passes through, and a
+    deployment that can start one but not finish it would fail after a gate rather
+    than before the work. Which phase runs when is the wiring change's decision.
+    """
+    if isinstance(route.specialist, ExternalSpecialist):
+        for phase_name, phase in route.specialist.phases.items():
+            specialists.require_runtime(route.name, phase_name, phase)
+        raise SpecialistNotWiredError(
+            f"this target is routed to specialist '{route.name}'"
+            f"{f' for scenario {route.scenario!r}' if route.scenario else ''}, and "
+            f"invoking `{route.specialist.command}` is not wired yet (ADR-0016). The "
+            "run stops here rather than falling back to the general-purpose "
+            "generator, which would produce output for a target that was routed away "
+            "from it."
+        )
+    return _invoke_claude_cli(_build_prompt(state, workspace), workspace, route.specialist)
+
+
+def coder(
+    state: GraphState,
+    workspace: Path,
+    fixtures_dir: Path,
+    routing_table: RoutingTable | None = None,
+) -> dict:
     start = time.monotonic()
     attempt_number = state.retry_count + 1
+    route: Resolution | None = None
 
     try:
+        # Resolved in both modes so the audit trail records which specialist a run was
+        # routed to. Replay does not act on it: a fixture is a recording of generation
+        # that already happened, whoever did it.
+        route = _resolve_route(workspace, routing_table)
         if state.mode == "live":
-            code_files = _invoke_claude_cli(_build_prompt(state, workspace), workspace)
+            code_files = _generate_live(state, workspace, route)
             fixture_source = None
-            rationale = f"Live generation, attempt {attempt_number}."
+            rationale = f"Live generation by '{route.name}', attempt {attempt_number}."
         else:
             fixture = _load_fixture(fixtures_dir, state.scenario_type)
             entry = _select_fixture_attempt(
@@ -316,7 +391,7 @@ def coder(state: GraphState, workspace: Path, fixtures_dir: Path) -> dict:
             event_type="node_end",
             detail=(
                 f"attempt {attempt_number}: generated {len(code_files)} file(s) "
-                f"({state.mode} mode)"
+                f"({state.mode} mode, specialist '{route.name}')"
             ),
             latency_ms=(time.monotonic() - start) * 1000,
         )

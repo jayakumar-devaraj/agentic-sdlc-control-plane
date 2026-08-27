@@ -125,6 +125,22 @@ def test_git_current_commit_returns_none_before_any_commit(tmp_path: Path):
     assert tools.git_current_commit(tmp_path) is None
 
 
+def test_git_remote_url_returns_none_outside_a_repository(tmp_path: Path):
+    assert tools.git_remote_url(tmp_path / "never-cloned") is None
+
+
+def test_git_remote_url_returns_none_when_a_repository_has_no_origin(tmp_path: Path):
+    """A fresh `git init` is what the suite and the local quickstart produce. Not a failure."""
+    tools.git_init_if_needed(tmp_path)
+    assert tools.git_remote_url(tmp_path) is None
+
+
+def test_git_remote_url_reports_where_the_workspace_was_cloned_from(tmp_path: Path):
+    tools.git_init_if_needed(tmp_path)
+    tools._run_git(tmp_path, "remote", "add", "origin", "https://example.invalid/o/target.git")
+    assert tools.git_remote_url(tmp_path) == "https://example.invalid/o/target.git"
+
+
 def test_git_operation_error_raised_on_invalid_revert_target(tmp_path: Path):
     tools.write_code_files(tmp_path, {"app/ok.py": "x = 1\n"})
     tools.git_commit_all(tmp_path, "initial")

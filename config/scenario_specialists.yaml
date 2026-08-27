@@ -1,0 +1,67 @@
+# Which generator produces code for a run, and with what model.
+#
+# THIS FILE IS THE ONLY PLACE IN THIS REPOSITORY WHERE A TENANT IS NAMED IN A WAY THE
+# RUNTIME READS. That is the point of it. ADR-0001 requires the package to be
+# domain-agnostic and CI fails the build when `agentic_control_plane/` or `tests/`
+# carries tenant vocabulary, so the routing table is data and the resolver that reads
+# it (`agentic_control_plane/specialists.py`) knows nothing about what is in it.
+#
+# Schema, resolution rules and the reasoning behind both: docs/adr/0016.
+#
+# Override the whole file with SPECIALIST_ROUTING_FILE to route a deployment
+# differently without rebuilding the image. Delete it, or mount an empty path over it,
+# and every run takes `default` below - which is exactly the behaviour this repository
+# had before routing existed.
+
+version: 1
+
+specialists:
+  # The general-purpose generator built into the Coder node: one `claude` CLI call
+  # asking for a {path: contents} object. `model` and `cli_timeout_seconds` were
+  # module constants in nodes/coder.py until ADR-0016; the values here are those
+  # constants, unchanged, because a routing refactor must not change what a working
+  # deployment does. `default` is required, must be `builtin`, and is what any target
+  # with no matching route below resolves to.
+  default:
+    kind: builtin
+    model: claude-sonnet-5
+    # 300s was too tight for a retry prompt covering several files - a genuine timeout
+    # (not a hang) was observed during brownfield fixture capture.
+    cli_timeout_seconds: 480
+
+  # A legacy-modernization specialist: a separately released tool with two bounded
+  # subcommands, its own prompts and model configuration, and its own build-and-heal
+  # loop. Not a prompt variation on the generator above - a different program.
+  #
+  # `requires` is not aspirational. It is the provisioning list that repository's
+  # ADR-0055 named for whatever invokes it, and this image (python:3.12-slim) carries
+  # none of it. The resolver checks these before invoking anything and reports what is
+  # absent by name; a specialist-capable deployment is a customised image, not a
+  # config toggle.
+  #
+  # `distribution` is deliberately absent rather than guessed. ADR-0055 decided the
+  # form - `pip install "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@<tag>"`
+  # - and that repository has published no tag yet, so there is nothing truthful to
+  # pin. It lands with the change that actually installs and invokes the CLI.
+  cobol-modernizer:
+    kind: external
+    command: cobol-modernizer
+    phases:
+      design:
+        args: [design]
+        requires:
+          executables: [claude]
+      generate:
+        args: [generate]
+        requires:
+          # The Java baseline's own test uses Testcontainers, hence the daemon.
+          executables: [claude, java, mvn]
+          docker_daemon: true
+
+# Matched on the target repository - the last path segment of the workspace's `origin`
+# remote, minus any `.git`, compared case-insensitively. `scenario` is a label for the
+# audit trail; it selects nothing. A repository may appear at most once.
+routes:
+  - scenario: legacy-batch-modernization
+    repository: carddemo-tenant-service
+    specialist: cobol-modernizer

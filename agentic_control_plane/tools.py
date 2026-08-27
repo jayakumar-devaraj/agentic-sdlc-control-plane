@@ -210,6 +210,23 @@ def git_current_commit(workspace: Path) -> str | None:
         return None
 
 
+def git_remote_url(workspace: Path) -> str | None:
+    """Where this workspace was cloned from, or None if it was not cloned at all.
+
+    The clone URL is what identifies the tenant service a run is working on, and it
+    is the key specialist routing matches on (ADR-0016). Tolerant in the same shape
+    as git_current_commit and for the same reason: a workspace with no remote - a
+    fresh `git init`, which is what the test suite and the local quickstart produce -
+    is an ordinary state, not a failure.
+    """
+    if not (workspace / ".git").is_dir():
+        return None
+    try:
+        return _run_git(workspace, "remote", "get-url", "origin") or None
+    except GitOperationError:
+        return None
+
+
 def git_commit_all(workspace: Path, message: str) -> str:
     """Stage and commit all changes in the target-app workspace.
 

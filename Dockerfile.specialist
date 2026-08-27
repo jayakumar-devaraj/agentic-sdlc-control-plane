@@ -1,0 +1,109 @@
+# syntax=docker/dockerfile:1
+#
+# A specialist-capable control plane (ADR-0017).
+#
+# The default image is `python:3.12-slim` and carries no specialist runtime, deliberately: a
+# routing table can send a run to an external specialist, and ADR-0016 answers "what if the
+# environment cannot run it" with a named preflight failure rather than a config toggle. This
+# file is the customised image that preflight is talking about.
+#
+# **It is a separate file rather than a stage in `Dockerfile`, on purpose.** A trailing stage
+# becomes the default target of a bare `docker build .`, which would silently turn every existing
+# build - compose, CI, anyone's local - into this much larger image. Basing on the built default
+# image instead keeps that untouched and makes the addition legible as a diff.
+ARG BASE_IMAGE=agentic-sdlc-control-plane-consumer:latest
+FROM ${BASE_IMAGE}
+
+# Versions are pinned to what the specialist's own baseline pins, not to "latest". The generated
+# project asserts its JDK's feature version in a test, and its Maven wrapper names one exact
+# distribution; an image that disagrees produces failures attributed to generated code.
+ARG TEMURIN_VERSION=25.0.4+7
+ARG MAVEN_VERSION=3.9.16
+
+USER root
+
+# `xz-utils` is for Node's tarball; the JDK and Maven ship gzipped and need nothing extra.
+RUN apt-get update && apt-get install -y --no-install-recommends curl xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Temurin 25, from the tarball rather than from apt. Debian's own `maven` package depends on
+# `default-jdk`, which is 17 here - installing it would put a second, older JDK on PATH and the
+# baseline pins 25.
+RUN set -eu; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) tag=x64 ;; \
+      arm64) tag=aarch64 ;; \
+      *) echo "unsupported architecture for a Temurin build: $arch" >&2; exit 1 ;; \
+    esac; \
+    encoded="$(printf '%s' "$TEMURIN_VERSION" | sed 's/+/%2B/')"; \
+    mkdir -p /opt/java; \
+    curl -fsSL -o /tmp/jdk.tar.gz \
+      "https://api.adoptium.net/v3/binary/version/jdk-${encoded}/linux/${tag}/jdk/hotspot/normal/eclipse"; \
+    tar -xzf /tmp/jdk.tar.gz -C /opt/java --strip-components=1; \
+    rm /tmp/jdk.tar.gz
+
+ENV JAVA_HOME=/opt/java
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+# Maven from the Apache distribution, same version the baseline's wrapper names. `./mvnw` is still
+# what `local_compiler` prefers - this is the fallback it drops to, and having it match means the
+# fallback is not a different build.
+RUN set -eu; \
+    curl -fsSL -o /tmp/maven.tar.gz \
+      "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/${MAVEN_VERSION}/apache-maven-${MAVEN_VERSION}-bin.tar.gz"; \
+    mkdir -p /opt/maven; \
+    tar -xzf /tmp/maven.tar.gz -C /opt/maven --strip-components=1; \
+    rm /tmp/maven.tar.gz; \
+    ln -s /opt/maven/bin/mvn /usr/local/bin/mvn
+
+# The `claude` CLI ships as an npm package, so Node comes with it. Installed from the registry
+# rather than by piping a shell script from the network into `bash`.
+#
+# **Node comes from nodejs.org's tarball, not from `apt install nodejs npm`.** Measured, not
+# assumed: Debian's `npm` package drags in `node-gyp` and a C/Python build toolchain, and that one
+# layer was **837 MB** of a 2.05 GB image. The tarball ships npm inside it and needs none of
+# that. Same machine, same two builds: 2.05 GB -> 1.55 GB. (CI's Linux runner reports the image
+# smaller than a Windows workstation does - 1.08 GB - so ADR-0017 quotes CI's number.)
+#
+# **This provides the binary and cannot provide the session.** `claude -p` needs an authenticated
+# login, which is per-operator and must never be baked into an image - mount it at runtime (see
+# ADR-0017). So `_require_claude_cli` passing on this image means the CLI is present, not that a
+# call will succeed.
+ARG NODE_VERSION=22.14.0
+# Set before the RUN below, not after it: npm's launcher is `#!/usr/bin/env node`, so installing a
+# global package needs `node` resolvable *during* that step. Declaring the path afterwards builds
+# an image where `claude` works and the build that produced it exited 127.
+ENV PATH="/opt/node/bin:${PATH}"
+RUN set -eu; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) tag=x64 ;; \
+      arm64) tag=arm64 ;; \
+      *) echo "unsupported architecture for a Node build: $arch" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /opt/node; \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${tag}.tar.xz" \
+      | tar -xJ -C /opt/node --strip-components=1; \
+    /opt/node/bin/npm install -g @anthropic-ai/claude-code; \
+    /opt/node/bin/npm cache clean --force
+
+# The specialist itself, from the pinned git ref ADR-0055 decided. Replaced by a build arg rather
+# than hardcoded so a newer tag is a build flag instead of an edit.
+ARG SPECIALIST_REQUIREMENT
+RUN --mount=type=secret,id=github_pat \
+    sh -c ' \
+        if [ -s /run/secrets/github_pat ]; then \
+            git config --global "url.https://x-access-token:$(cat /run/secrets/github_pat)@github.com/.insteadOf" "https://github.com/"; \
+        fi && \
+        if [ -n "$SPECIALIST_REQUIREMENT" ]; then \
+            pip install --no-cache-dir "$SPECIALIST_REQUIREMENT"; \
+        else \
+            echo "no SPECIALIST_REQUIREMENT given; image carries the runtime but no specialist" >&2; \
+        fi; \
+        status=$?; \
+        rm -f /root/.gitconfig; \
+        exit $status \
+    '
+
+CMD ["python", "-m", "agentic_control_plane.main"]

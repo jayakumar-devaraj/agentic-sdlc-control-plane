@@ -39,13 +39,18 @@ specialists:
   # absent by name; a specialist-capable deployment is a customised image, not a
   # config toggle.
   #
-  # `distribution` is deliberately absent rather than guessed. ADR-0055 decided the
-  # form - `pip install "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@<tag>"`
-  # - and that repository has published no tag yet, so there is nothing truthful to
-  # pin. It lands with the change that actually installs and invokes the CLI.
+  # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
+  # than a placeholder: `v0.1.0`, cut 2026-08-27, the first ref that repository has published.
+  # It was deliberately absent until one existed. Verified from a clean virtualenv before
+  # being written here - the CLI starts, reads its own packaged prompts and Java baseline
+  # with no checkout on any path, and that baseline's Maven wrapper resolves.
+  #
+  # Nothing installs it yet. `Dockerfile.specialist` takes it as SPECIALIST_REQUIREMENT
+  # (ADR-0017); the Coder node still stops before invoking anything (ADR-0016 § 5).
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.1.0"
     phases:
       design:
         args: [design]

@@ -393,3 +393,87 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down -v
+
+  specialist-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write the optional build secret
+        # Both builds below install agentic-events from agentic-sdlc-eventbus, whose visibility
+        # toggles. Same handling as the compose job and for the same reason (ADR-0015): the real
+        # PAT when one is configured, an EMPTY file when one is not - never a placeholder, since
+        # both Dockerfiles test `-s` and a non-empty dud turns a working anonymous build into a
+        # failing authenticated one.
+        env:
+          EVENTBUS_READ_PAT: ${{ secrets.EVENTBUS_READ_PAT }}
+        run: |
+          mkdir -p secrets
+          printf '%s' "$EVENTBUS_READ_PAT" > secrets/github_pat.txt
+
+      - name: Build the default image
+        # The base this one extends, and the control for the assertions below.
+        run: |
+          DOCKER_BUILDKIT=1 docker build             --secret id=github_pat,src=secrets/github_pat.txt             -t agentic-sdlc-control-plane-consumer:latest .
+
+      - name: Assert the DEFAULT image carries no specialist runtime
+        # Run first, and it is the more important of the two. ADR-0016's whole posture is that
+        # the ordinary deployment cannot run a specialist and says so by name; ADR-0017 adds a
+        # second image rather than growing this one. If a future change quietly moves the JDK
+        # into the default Dockerfile, everything downstream still passes and the decision is
+        # gone. This is what notices.
+        run: |
+          for tool in java mvn claude; do
+            if docker run --rm agentic-sdlc-control-plane-consumer:latest                  sh -c "command -v $tool" >/dev/null 2>&1; then
+              echo "::error::the default image carries $tool - see ADR-0017"
+              exit 1
+            fi
+          done
+          echo "default image is clean: no java, no mvn, no claude"
+
+      - name: Build the specialist-capable image
+        # No SPECIALIST_REQUIREMENT: this job verifies the runtime, and installing the
+        # specialist itself would make a green build depend on another repository's tag
+        # resolving. That belongs to the change that invokes it.
+        run: |
+          DOCKER_BUILDKIT=1 docker build -f Dockerfile.specialist             --secret id=github_pat,src=secrets/github_pat.txt             -t agentic-sdlc-control-plane-specialist:latest             --build-arg SPECIALIST_REQUIREMENT= .
+
+      - name: Assert the specialist image reports the pinned versions
+        # Versions, not mere presence. The generated project asserts its JDK feature version in a
+        # test of its own, so an image that disagrees with the baseline produces a failure the
+        # heal loop attributes to generated code.
+        run: |
+          set -eu
+          run() { docker run --rm agentic-sdlc-control-plane-specialist:latest "$@"; }
+
+          java_version="$(run java -version 2>&1 | head -1)"
+          echo "$java_version"
+          case "$java_version" in *'"25'*) ;; *) echo "::error::expected JDK 25"; exit 1 ;; esac
+
+          mvn_version="$(run mvn -v | head -1)"
+          echo "$mvn_version"
+          case "$mvn_version" in *3.9.16*) ;; *) echo "::error::expected Maven 3.9.16"; exit 1 ;; esac
+
+          claude_version="$(run claude --version)"
+          echo "claude: $claude_version"
+
+          run python -c "import agentic_control_plane; print('control plane still imports')"
+
+      - name: Assert the specialist image carries no credential
+        # Same regression guard as the default image, for the same reason: this build takes an
+        # optional PAT as a BuildKit secret and must not leave it in a layer (ADR-0015).
+        run: |
+          size=$(docker run --rm agentic-sdlc-control-plane-specialist:latest             sh -c 'stat -c %s /root/.gitconfig 2>/dev/null || echo 0')
+          echo "/root/.gitconfig is $size bytes"
+          if [ "$size" != "0" ]; then
+            echo "::error::build credential persisted into the specialist image"
+            exit 1
+          fi
+
+      - name: Report what the capability costs
+        # Reported rather than gated. A threshold here would be a number nobody can justify;
+        # the delta being visible on every run is what makes a jump noticeable.
+        run: |
+          docker images --format '{{.Repository}}:{{.Tag}}	{{.Size}}'             | grep agentic-sdlc-control-plane

@@ -18,6 +18,10 @@ GateType = Literal[
     "plan_approval",
     "replanning_approval",
     "merge_release_approval",
+    # Raised by the specialist graph, not by this module's own workflow (ADR-0019). The gate
+    # vocabulary is shared because a decision published on the gate-decision topic has to name
+    # its gate the same way whichever graph raised it - one consumer, one vocabulary.
+    "specialist_design_review",
 ]
 GateDecisionStatus = Literal["pending", "approved", "rejected", "edited"]
 DecidedBy = Literal["human", "replayed"]

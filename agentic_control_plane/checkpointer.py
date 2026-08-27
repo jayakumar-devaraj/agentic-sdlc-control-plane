@@ -26,21 +26,35 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from pydantic import BaseModel
 
+from agentic_control_plane import specialist_state as specialist_state_module
 from agentic_control_plane import state as state_module
 
 logger = logging.getLogger(__name__)
 
 
-def _discover_state_model_allowlist() -> list[tuple[str, str]]:
+#: Every state module this process can check-point. Both graphs share one saver, so the serde has
+#: to know both vocabularies - a run parked by either must be readable by either (ADR-0019).
+STATE_MODULES = (state_module, specialist_state_module)
+
+
+def _discover_state_model_allowlist(modules=STATE_MODULES) -> list[tuple[str, str]]:
+    """The pydantic models the serde may reconstruct, discovered rather than listed.
+
+    Takes its modules as an argument because it used to name exactly one, which made the durable
+    checkpointer usable by exactly one graph. A model missing from this list does not fail loudly
+    at write time - it fails at *resume*, which is hours later and in a different process, so the
+    discovery is deliberately by introspection rather than by a hand-kept list.
+    """
     allowlist: list[tuple[str, str]] = []
-    for name, obj in inspect.getmembers(state_module, inspect.isclass):
-        if issubclass(obj, BaseModel) and obj.__module__ == state_module.__name__:
-            allowlist.append((state_module.__name__, name))
+    for module in modules:
+        for name, obj in inspect.getmembers(module, inspect.isclass):
+            if issubclass(obj, BaseModel) and obj.__module__ == module.__name__:
+                allowlist.append((module.__name__, name))
     return allowlist
 
 
-def build_serde() -> JsonPlusSerializer:
-    return JsonPlusSerializer(allowed_msgpack_modules=_discover_state_model_allowlist())
+def build_serde(modules=STATE_MODULES) -> JsonPlusSerializer:
+    return JsonPlusSerializer(allowed_msgpack_modules=_discover_state_model_allowlist(modules))
 
 
 def build_memory_checkpointer() -> MemorySaver:

@@ -15,13 +15,29 @@ state, paused and resumed across two independent saver contexts with an opaque a
 
 The shape:
 
-    START -> design -> (gate: specialist_design_review) -> generate -> END
-                            |
-                            +-- rejected -> END
+    START -> design -> (gate: specialist_design_review) -> generate
+                            |                                 |
+                            +-- rejected -> END               v
+                                              (gate: merge_release_approval) -> publish -> END
+                                                    |
+                                                    +-- rejected -> END
+
+Two gates, guarding different things. The first protects the expensive phase and asks about an
+artifact a person can read. The second protects a **repository**, and is the only point at which
+anything leaves this run.
 
 `design` and `generate` are separate processes with no shared state, which is why the approved
 artifact travels on the state rather than being re-derived: the path written by the first phase is
 handed to the second verbatim.
+
+**Nothing commits before the release gate approves.** That is why there is no rollback node here
+and no equivalent of the SDLC graph's revert: a `generate` that fails half-way leaves an untouched
+checkout rather than a reverted one, and a run that is never approved leaves the target project
+exactly as it found it.
+
+A route that names no output repository stops after `generate`, having written to a local
+directory. That is the honest default - publishing to a repository nobody named is the one mistake
+in this graph that cannot be undone by deleting a directory.
 """
 
 from __future__ import annotations
@@ -34,7 +50,7 @@ from pathlib import Path
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from agentic_control_plane import specialist_invocation
+from agentic_control_plane import publish, specialist_invocation, tools, workspace
 from agentic_control_plane.specialist_state import SpecialistPhaseResult, SpecialistRunState
 from agentic_control_plane.specialists import ExternalSpecialist
 from agentic_control_plane.state import AuditEvent, GateRecord
@@ -44,6 +60,11 @@ logger = logging.getLogger(__name__)
 DESIGN_PHASE = "design"
 GENERATE_PHASE = "generate"
 DESIGN_GATE = "specialist_design_review"
+
+#: The same gate name the SDLC graph uses before it commits anything. Reused rather than given a
+#: seventh name of its own: publishing generated Java and publishing generated Python are the same
+#: decision - *may this change land* - and the decision consumer already understands this one.
+RELEASE_GATE = "merge_release_approval"
 
 #: The flag names control-plane fills in. Part of the contract in ADR-0018, not per-specialist
 #: configuration - a specialist that does not accept them cannot be told what to read or where to
@@ -170,12 +191,39 @@ def design_review_gate(state: SpecialistRunState) -> dict:
     return updates
 
 
+def ensure_output_checkout(
+    output_path: Path, output_repository: str | None, output_branch: str
+) -> None:
+    """Make sure the project generated code is written into is present and is a real checkout.
+
+    **Lazily, in the node that needs it, rather than at trigger time**, and that is not just
+    tidiness: this runs after a human gate, so it routinely runs in a different process from the
+    one that started the run and after any number of restarts. A clone taken at trigger time
+    would have to be reconstructed here anyway.
+
+    An existing checkout is reused rather than re-cloned - a design was approved against a
+    particular state of the world, and silently replacing it mid-run would discard that.
+    """
+    if (output_path / ".git").is_dir():
+        logger.info("Reusing the existing output checkout at %s", output_path)
+        return
+    if output_repository:
+        workspace.clone_repository(output_path, output_repository, output_branch)
+        return
+    # No repository configured: a local directory the specialist writes into, and which nothing
+    # publishes. `_route_after_generate` is what makes that a terminal path rather than a
+    # half-finished one.
+    output_path.mkdir(parents=True, exist_ok=True)
+
+
 def generate_node(
     state: SpecialistRunState,
     *,
     specialist: ExternalSpecialist,
     tenant_repo: Path,
     output_repo: Path,
+    output_repository: str | None = None,
+    output_branch: str = "main",
 ) -> dict:
     """Run the second phase, reading the approved design and writing to the target project.
 
@@ -199,7 +247,11 @@ def generate_node(
             ),
         )
 
-    output_repo.mkdir(parents=True, exist_ok=True)
+    try:
+        ensure_output_checkout(output_repo, output_repository, output_branch)
+    except workspace.CloneError as exc:
+        return _failure(GENERATE_PHASE, exc)
+
     try:
         result = specialist_invocation.invoke(
             specialist=specialist,
@@ -218,15 +270,131 @@ def generate_node(
 
     phases = dict(state.phases)
     phases[GENERATE_PHASE] = _record(result, output_repo)
-    return {
+    updates: dict = {
         "phases": phases,
-        "run_status": "completed",
-        "finished_at": datetime.now(timezone.utc),
+        "output_repository": output_repository or "",
+        "output_branch": output_branch if output_repository else "",
         "events": [
             AuditEvent(
                 node=GENERATE_PHASE,
                 event_type="node_end",
                 detail=f"specialist '{state.specialist}' generated into {output_repo}: {result.detail}",
+                latency_ms=(time.monotonic() - start) * 1000,
+            )
+        ],
+    }
+    if not output_repository:
+        # Nothing to publish, so this is where the run ends. Marked here rather than left for the
+        # router to infer, so "completed" is set by the node that knows the work is finished.
+        updates |= {"run_status": "completed", "finished_at": datetime.now(timezone.utc)}
+    return updates
+
+
+def release_review_gate(state: SpecialistRunState) -> dict:
+    """Pause on the generated change, before anything leaves this run.
+
+    The second gate, and the one that guards something irreversible. The design gate protects the
+    expensive phase; this one protects a repository. It carries the same name the SDLC graph's
+    release gate carries, because it is the same decision.
+    """
+    generated = state.phases.get(GENERATE_PHASE)
+    decision = interrupt(
+        {
+            "gate_type": RELEASE_GATE,
+            "run_id": state.run_id,
+            "specialist": state.specialist,
+            "scenario": state.scenario,
+            "output_repository": state.output_repository,
+            "output_branch": state.output_branch,
+            "detail": generated.detail if generated else "",
+            # What the specialist reported about its own work - step counts, what it could not
+            # generate - unmodelled, so a reviewer sees the specialist's account rather than ours.
+            "generated": generated.payload if generated else {},
+            "files": _generated_file_names(Path(generated.output_path)) if generated else [],
+        }
+    )
+    status = decision.get("status", "approved")
+    gates = dict(state.gates)
+    gates[RELEASE_GATE] = GateRecord(
+        gate_type=RELEASE_GATE,
+        status=status,
+        decision_payload=str(decision),
+        decided_by=decision.get("decided_by", "human"),
+        replayed_from_fixture=decision.get("replayed_from_fixture", False),
+        timestamp=datetime.now(timezone.utc),
+    )
+    updates: dict = {
+        "gates": gates,
+        "events": [
+            AuditEvent(
+                node=RELEASE_GATE,
+                event_type="gate_decision",
+                detail=f"release review {status}",
+                decision=status,
+            )
+        ],
+    }
+    if status != "approved":
+        updates |= {"run_status": "completed", "finished_at": datetime.now(timezone.utc)}
+    return updates
+
+
+#: A reviewer needs to know what changed, not to read it in a gate payload. Bounded because a
+#: generated project can be large and this crosses a checkpoint.
+_MAX_LISTED_FILES = 200
+
+
+def _generated_file_names(output_path: Path) -> list[str]:
+    if not output_path.is_dir():
+        return []
+    names = sorted(
+        str(path.relative_to(output_path)).replace("\\", "/")
+        for path in output_path.rglob("*")
+        if path.is_file() and ".git" not in path.parts
+    )
+    return names[:_MAX_LISTED_FILES]
+
+
+def publish_node(state: SpecialistRunState, *, output_repo: Path) -> dict:
+    """Commit what was generated and deliver it according to PUBLISH_MODE.
+
+    **The commit happens here and nowhere earlier**, which is the whole shape of this graph's
+    safety: a `generate` that fails half-way leaves an untouched checkout rather than a reverted
+    one, and there is no rollback node because there is nothing to roll back.
+
+    Delivery failure does not fail the run. The work was generated and approved either way, and
+    the outcome records what happened to it - the same posture ADR-0012 set for the SDLC path.
+    """
+    start = time.monotonic()
+    try:
+        commit_sha = tools.git_commit_all(
+            output_repo, f"[agentic-sdlc] generated by '{state.specialist}' for run {state.run_id}"
+        )
+    except tools.GitOperationError as exc:
+        return _failure("publish", exc)
+
+    result = publish.publish_change(
+        workspace=output_repo,
+        run_id=state.run_id,
+        repo_url=state.output_repository,
+        base_branch=state.output_branch or "main",
+        requirement=state.scenario,
+    )
+    detail = result.error or (
+        f"published to {result.branch}" if result.published else f"mode={result.mode}, not published"
+    )
+    return {
+        "run_status": "completed",
+        "finished_at": datetime.now(timezone.utc),
+        "commit_sha_after": commit_sha,
+        "published": result.published,
+        "publish_branch": result.branch or "",
+        "publish_detail": detail,
+        "events": [
+            AuditEvent(
+                node="publish",
+                event_type="node_end",
+                detail=f"commit {commit_sha[:8]}: {detail}",
                 latency_ms=(time.monotonic() - start) * 1000,
             )
         ],
@@ -244,12 +412,29 @@ def _route_after_gate(state: SpecialistRunState) -> str:
     return "end"
 
 
+def _route_after_generate(state: SpecialistRunState) -> str:
+    if state.safe_stop:
+        return "end"
+    # A route that names no output repository ends here: there is nowhere to publish to, and a
+    # release gate over a local directory would ask a human to approve nothing.
+    return "release_review" if state.output_repository else "end"
+
+
+def _route_after_release_gate(state: SpecialistRunState) -> str:
+    gate = state.gates.get(RELEASE_GATE)
+    if gate is not None and gate.status == "approved":
+        return "publish"
+    return "end"
+
+
 def build_specialist_graph(
     *,
     specialist: ExternalSpecialist,
     tenant_repo: Path,
     output_repo: Path,
     checkpointer,
+    output_repository: str | None = None,
+    output_branch: str = "main",
 ):
     """Compile the specialist topology against one run's paths.
 
@@ -271,8 +456,12 @@ def build_specialist_graph(
             specialist=specialist,
             tenant_repo=tenant_repo,
             output_repo=output_repo,
+            output_repository=output_repository,
+            output_branch=output_branch,
         ),
     )
+    graph.add_node("release_review", release_review_gate)
+    graph.add_node("publish", partial(publish_node, output_repo=output_repo))
 
     graph.add_edge(START, "design")
     graph.add_conditional_edges(
@@ -281,6 +470,12 @@ def build_specialist_graph(
     graph.add_conditional_edges(
         "design_review", _route_after_gate, {"generate": "generate", "end": END}
     )
-    graph.add_edge("generate", END)
+    graph.add_conditional_edges(
+        "generate", _route_after_generate, {"release_review": "release_review", "end": END}
+    )
+    graph.add_conditional_edges(
+        "release_review", _route_after_release_gate, {"publish": "publish", "end": END}
+    )
+    graph.add_edge("publish", END)
 
     return graph.compile(checkpointer=checkpointer)

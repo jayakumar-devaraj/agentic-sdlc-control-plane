@@ -70,6 +70,17 @@ class SpecialistRunState(BaseModel):
     #: an appending list because re-running a phase supersedes it rather than adding to it.
     phases: dict[str, SpecialistPhaseResult] = Field(default_factory=dict)
 
+    #: The project generated code is written into, and what happened to it. Empty when the route
+    #: names none, which is the case where nothing is published at all.
+    output_repository: str = ""
+    output_branch: str = ""
+    #: Set only once the release gate approved and a commit was made, so its presence is the
+    #: answer to "did anything leave this run" rather than something to be inferred from counters.
+    commit_sha_after: str | None = None
+    published: bool = False
+    publish_branch: str = ""
+    publish_detail: str = ""
+
     events: Annotated[list[AuditEvent], operator.add] = Field(default_factory=list)
 
     started_at: datetime = Field(default_factory=_utc_now)

@@ -401,9 +401,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Write the optional build secret
+        # Both builds below install agentic-events from agentic-sdlc-eventbus, whose visibility
+        # toggles. Same handling as the compose job and for the same reason (ADR-0015): the real
+        # PAT when one is configured, an EMPTY file when one is not - never a placeholder, since
+        # both Dockerfiles test `-s` and a non-empty dud turns a working anonymous build into a
+        # failing authenticated one.
+        env:
+          EVENTBUS_READ_PAT: ${{ secrets.EVENTBUS_READ_PAT }}
+        run: |
+          mkdir -p secrets
+          printf '%s' "$EVENTBUS_READ_PAT" > secrets/github_pat.txt
+
       - name: Build the default image
         # The base this one extends, and the control for the assertions below.
-        run: docker build -t agentic-sdlc-control-plane-consumer:latest .
+        run: |
+          DOCKER_BUILDKIT=1 docker build             --secret id=github_pat,src=secrets/github_pat.txt             -t agentic-sdlc-control-plane-consumer:latest .
 
       - name: Assert the DEFAULT image carries no specialist runtime
         # Run first, and it is the more important of the two. ADR-0016's whole posture is that
@@ -425,7 +438,7 @@ jobs:
         # specialist itself would make a green build depend on another repository's tag
         # resolving. That belongs to the change that invokes it.
         run: |
-          docker build -f Dockerfile.specialist             -t agentic-sdlc-control-plane-specialist:latest             --build-arg SPECIALIST_REQUIREMENT= .
+          DOCKER_BUILDKIT=1 docker build -f Dockerfile.specialist             --secret id=github_pat,src=secrets/github_pat.txt             -t agentic-sdlc-control-plane-specialist:latest             --build-arg SPECIALIST_REQUIREMENT= .
 
       - name: Assert the specialist image reports the pinned versions
         # Versions, not mere presence. The generated project asserts its JDK feature version in a

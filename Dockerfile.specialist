@@ -63,7 +63,8 @@ RUN set -eu; \
 # **Node comes from nodejs.org's tarball, not from `apt install nodejs npm`.** Measured, not
 # assumed: Debian's `npm` package drags in `node-gyp` and a C/Python build toolchain, and that one
 # layer was **837 MB** of a 2.05 GB image. The tarball ships npm inside it and needs none of
-# that, and the same image comes out at **1.55 GB**.
+# that. Same machine, same two builds: 2.05 GB -> 1.55 GB. (CI's Linux runner reports the image
+# smaller than a Windows workstation does - 1.08 GB - so ADR-0017 quotes CI's number.)
 #
 # **This provides the binary and cannot provide the session.** `claude -p` needs an authenticated
 # login, which is per-operator and must never be baked into an image - mount it at runtime (see

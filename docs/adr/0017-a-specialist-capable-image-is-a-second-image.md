@@ -92,15 +92,22 @@ routing decision and the runtime it demands finally exist in the same place.
 `SpecialistNotWiredError`. Wiring is the next change, and keeping it separate means the image can be
 built, inspected and rejected on its own terms.
 
-**The image is much larger than the default** - **1.55 GB against 452 MB** - and that cost buys one
-capability. CI reports both on every run rather than gating on a threshold nobody can justify; a
-jump being visible is what makes it noticeable.
+**The image is much larger than the default** - **1.08 GB against 311 MB** on CI's Linux runner -
+and that cost buys one capability. CI reports both on every run rather than gating on a threshold
+nobody can justify; a jump being visible is what makes it noticeable.
+
+**Quote CI's numbers, not a workstation's.** The same two Dockerfiles measure **1.55 GB against
+452 MB** on Docker Desktop for Windows. Both figures are real and they disagree by about a third,
+so the one worth recording is from the platform this deploys on. No mechanism is asserted here for
+the gap, because none was investigated - only that a size read off a developer's machine is not the
+size CI reports, which is enough to stop the wrong one being written into a document.
 
 **Half a gigabyte of that was avoidable and `docker history` is how it was found, not intuition.**
 The first build came out at 2.05 GB with a single **837 MB** layer, which was Debian's `npm`
 package pulling in `node-gyp` and a C/Python build toolchain to install one JavaScript CLI. Node
-from nodejs.org's own tarball ships npm and needs none of it. The remaining bulk is the JDK
-(317 MB), which is not avoidable - the baseline compiles Java.
+from nodejs.org's own tarball ships npm and needs none of it - 2.05 GB to 1.55 GB, measured twice
+on the same machine so the comparison holds whatever the absolute numbers are worth. The remaining
+bulk is the JDK (317 MB), which is not avoidable: the baseline compiles Java.
 
 **What is not verified here.** No specialist has been invoked, so the daemon-mount decision in § 5
 is reasoned rather than exercised — in particular, Testcontainers inside a container talking to the

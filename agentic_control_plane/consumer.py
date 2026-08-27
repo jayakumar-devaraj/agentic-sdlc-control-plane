@@ -49,9 +49,8 @@ from datetime import datetime, timezone
 
 from agentic_events import EventEnvelope
 
-from agentic_control_plane import events, heartbeat, publish, runner, workspace
+from agentic_control_plane import events, heartbeat, publish, run_routing, runner, workspace
 from agentic_control_plane.inbox import payload_of
-from agentic_control_plane.state import GraphState
 from agentic_control_plane.telemetry import TelemetrySink, render_console_line
 
 logger = logging.getLogger(__name__)
@@ -389,13 +388,29 @@ class Worker:
             self._publish_outcome(work.run_id, "clone_failed", detail=str(exc))
             return
 
-        initial = GraphState(
-            scenario_type=work.scenario_type,
-            requirement_raw=work.requirement,
-            mode="live" if _is_live_mode() else "replay",
-        )
+        # Routed here rather than inside the graph, because the graph's own first three nodes
+        # assume the built-in generator: a brownfield run parks at `codebase_impact_review`
+        # before it would ever reach the node that once made this decision (ADR-0020). The clone
+        # above is what makes this the right place - the identity routing matches on is its
+        # `origin` remote, and it exists from this line onward.
         try:
-            result = runner.start_run(work.run_id, initial, self.checkpointer)
+            initial, graph_factory = run_routing.plan_for_trigger(
+                run_id=work.run_id,
+                scenario_type=work.scenario_type,
+                requirement=work.requirement,
+                mode="live" if _is_live_mode() else "replay",
+            )
+        except Exception as exc:
+            # A routing table that will not load must not look like a failed run: nothing has
+            # executed, and the fix is a config file rather than anything about this target.
+            logger.error("Routing failed for run %s: %s", work.run_id, exc)
+            self._publish_outcome(work.run_id, "routing_failed", detail=str(exc))
+            return
+
+        try:
+            result = runner.start_run(
+                work.run_id, initial, self.checkpointer, graph_factory
+            )
         except Exception as exc:
             self._fail_run(work.run_id, exc)
             return
@@ -409,7 +424,19 @@ class Worker:
         # benign; anything else has to propagate to the worker loop and be logged
         # with its traceback.
         try:
-            result = runner.resume_run(work.run_id, work.decision, self.checkpointer)
+            # Which graph this run belongs to is recovered from its own checkpoint: a resume is
+            # routinely a different process from the one that started it, so nothing in memory
+            # can be consulted (ADR-0020).
+            graph_factory = run_routing.graph_factory_for_existing_run(
+                work.run_id, self.checkpointer
+            )
+            result = runner.resume_run(
+                work.run_id, work.decision, self.checkpointer, graph_factory
+            )
+        except run_routing.RoutingChangedError as exc:
+            logger.error("Refusing to resume run %s: %s", work.run_id, exc)
+            self._publish_outcome(work.run_id, "routing_changed", detail=str(exc))
+            return
         except runner.UnknownRunError:
             logger.warning(
                 "Decision for unknown run %s; ignoring (it may belong to another "

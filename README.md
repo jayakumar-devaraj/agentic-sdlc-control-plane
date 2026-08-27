@@ -266,6 +266,7 @@ Configuration:
 | `WORKSPACES_ROOT` | `/workspaces` | Where per-run clones live |
 | `FIXTURES_DIR` | `/fixtures` | Replay-mode fixtures. Empty unless you mount your own — see below. |
 | `SPECIALIST_ROUTING_FILE` | `config/scenario_specialists.yaml` | Which generator handles which target, and with what model — see below |
+| `SPECIALIST_OUTPUT_ROOT` | `/specialist-output` | Where a routed specialist writes. A separate mount from `WORKSPACES_ROOT` on purpose — reconciliation sweeps that root |
 | `ORCHESTRATOR_MODE` | `replay` | `live` requires a `claude` CLI this image does not install |
 | `PUBLISH_MODE` | `none` | `none` / `branch` / `pull_request`. What happens to an approved change. Anything but `none` needs a **write-scoped** PAT — see [ADR 0012](docs/adr/0012-an-approved-change-must-outlive-the-run-that-made-it.md) |
 | `PARKED_RUN_TTL_HOURS` | `24` | After this, a parked run is reported `stale` and cleaned up |
@@ -328,9 +329,30 @@ and every run takes `default` with the values above.
 An external specialist's `requires` list is checked before anything is invoked, and what is absent
 is reported by name. This image is `python:3.12-slim` and carries no specialist runtime, so a
 specialist-capable deployment is a customised image rather than a config setting — the same posture
-live mode already has for the `claude` CLI. **Invoking an external specialist is not wired yet**: a
-run routed to one reaches a defined terminal state with a stated reason rather than falling back to
-the general-purpose generator below.
+live mode already has for the `claude` CLI.
+
+**A routed run does not enter the graph described below.** The decision is made when the run is
+created, immediately after its target is cloned, and a routed run executes its own graph instead:
+
+```mermaid
+flowchart LR
+    T["trigger<br/>(target cloned)"] --> R{"routed?"}
+    R -- "no" --> S["the SDLC graph"]
+    R -- "yes" --> D["design"]
+    D --> G(["gate:<br/>specialist_design_review"])
+    G -- "approved" --> N["generate"]
+    G -- "rejected" --> E(["end"])
+    N --> E
+```
+
+Routing before the graph rather than inside it is deliberate: the SDLC graph's own first nodes
+gate a brownfield run on a codebase-impact analysis, which is not a decision a reviewer can
+usefully make about a run whose code an external tool will write. See
+[ADR 0019](docs/adr/0019-a-specialist-run-is-its-own-graph.md) and
+[ADR 0020](docs/adr/0020-a-run-is-routed-to-its-graph-before-it-starts.md).
+
+**Nothing is published yet.** A specialist writes into `SPECIALIST_OUTPUT_ROOT`, which is a local
+directory rather than a clone of the target project.
 
 ### Code generation modes
 

@@ -17,8 +17,9 @@ from uuid import uuid4
 import pytest
 
 import subprocess
+import sys
 
-from agentic_control_plane import consumer, events, publish, runner, tools, workspace
+from agentic_control_plane import consumer, events, publish, run_routing, runner, tools, workspace
 from agentic_control_plane.checkpointer import build_memory_checkpointer
 from agentic_control_plane.telemetry import TelemetrySink, verify_chain
 
@@ -1062,3 +1063,120 @@ def test_worker_loop_survives_a_failing_work_item(
     thread.join(timeout=3)
 
     assert not thread.is_alive()
+
+
+def test_a_routing_table_that_will_not_load_is_reported_without_running_anything(
+    worker_env: Path, origin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Nothing has executed, so this must not look like a failed run.
+
+    The distinction matters to whoever reads the outcome topic: `run_failed` sends someone to
+    look at the target, and the fix here is a config file.
+    """
+    broken = tmp_path / "broken-routing.yaml"
+    broken.write_text("version: 1\nspecialists: {}\n", encoding="utf-8")
+    monkeypatch.setenv("SPECIALIST_ROUTING_FILE", str(broken))
+
+    outcomes = _published(monkeypatch)
+    checkpointer = build_memory_checkpointer()
+    worker = consumer.Worker(checkpointer)
+
+    worker.handle_trigger(
+        consumer.TriggerWork("run-badroute", "brownfield", str(origin), "main", "fix it")
+    )
+
+    assert [o.payload["terminal_state"] for o in outcomes] == ["routing_failed"]
+    assert runner.already_known("run-badroute", checkpointer) is False, (
+        "no graph should have started"
+    )
+
+
+def test_a_decision_is_refused_when_its_run_no_longer_routes_where_it_did(
+    worker_env: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A table edited while a human was still looking at the gate. Resuming would generate
+
+    from a design the now-configured specialist did not write.
+    """
+    outcomes = _published(monkeypatch)
+
+    def refuse(run_id, checkpointer, table=None):
+        raise run_routing.RoutingChangedError("the target now routes elsewhere")
+
+    monkeypatch.setattr(run_routing, "graph_factory_for_existing_run", refuse)
+    worker = consumer.Worker(build_memory_checkpointer())
+
+    worker.handle_decision(consumer.DecisionWork("run-moved", {"status": "approved"}))
+
+    assert [o.payload["terminal_state"] for o in outcomes] == ["routing_changed"]
+
+
+def test_a_routed_target_starts_the_specialist_graph_and_parks_on_its_design(
+    worker_env: Path, origin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The whole path, end to end: trigger, clone, route, specialist graph, design gate.
+
+    The route names `origin` because that is the last path segment of the clone URL this
+    fixture's repository lives at, and the repository name is what routing matches on.
+
+    What this asserts beyond "it ran" is that it parked on the **specialist's** gate. Under the
+    framing this replaced, a brownfield run reached `codebase_impact_review` first - a gate about
+    a Python codebase-impact analysis - and a reviewer would have had to approve that before the
+    specialist was ever consulted.
+    """
+    specialist_script = tmp_path / "widget_migrator.py"
+    specialist_script.write_text(
+        "import argparse, json, os\n"
+        "p = argparse.ArgumentParser()\n"
+        "p.add_argument('subcommand')\n"
+        "p.add_argument('--tenant-repo')\n"
+        "p.add_argument('--output')\n"
+        "p.add_argument('--design')\n"
+        "p.add_argument('--run-id')\n"
+        "p.add_argument('--json', action='store_true')\n"
+        "a = p.parse_args()\n"
+        "os.makedirs(a.output, exist_ok=True)\n"
+        "open(os.path.join(a.output, 'design.json'), 'w').write('{}')\n"
+        "print(json.dumps({'status': 'ok', 'phase': 'design', 'run_id': a.run_id,\n"
+        "                  'detail': 'designed it', 'gate_item_count': 2}))\n",
+        encoding="utf-8",
+    )
+    table = tmp_path / "routing.yaml"
+    table.write_text(
+        "version: 1\n"
+        "specialists:\n"
+        "  default:\n"
+        "    kind: builtin\n"
+        "  widget-migrator:\n"
+        "    kind: external\n"
+        f"    command: {sys.executable!r}\n"
+        "    phases:\n"
+        "      design:\n"
+        f"        args: [{str(specialist_script)!r}, design]\n"
+        "      generate:\n"
+        f"        args: [{str(specialist_script)!r}, generate]\n"
+        "routes:\n"
+        "  - scenario: widget-modernisation\n"
+        "    repository: origin\n"
+        "    specialist: widget-migrator\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SPECIALIST_ROUTING_FILE", str(table))
+    monkeypatch.setenv("SPECIALIST_OUTPUT_ROOT", str(tmp_path / "specialist-output"))
+
+    outcomes = _published(monkeypatch)
+    checkpointer = build_memory_checkpointer()
+    worker = consumer.Worker(checkpointer)
+
+    worker.handle_trigger(
+        consumer.TriggerWork("run-spec", "brownfield", str(origin), "main", "modernise it")
+    )
+
+    assert outcomes == [], "a parked run has no outcome yet"
+    factory = run_routing.graph_factory_for_existing_run("run-spec", checkpointer)
+    assert factory is not None, "the run must be recognised as a specialist run on resume"
+
+    values = runner.snapshot_for("run-spec", checkpointer, factory).values
+    assert values["specialist"] == "widget-migrator"
+    assert values["phases"]["design"].payload["gate_item_count"] == 2
+    assert "codebase_impact_review" not in values["gates"]

@@ -70,3 +70,13 @@ routes:
   - scenario: legacy-batch-modernization
     repository: carddemo-tenant-service
     specialist: cobol-modernizer
+    # Generated code goes to a DIFFERENT project from the one matched above, which stays
+    # read-only for the whole run (ADR-0009). Naming it here is what makes publishing possible
+    # at all - a route without it runs and publishes nothing, which is the default for a reason.
+    #
+    # Reaching it needs two things this file cannot supply: a write-scoped GIT_PAT_FILE, since
+    # this repository is private, and PUBLISH_MODE set to something other than `none`. Both are
+    # deployment decisions, and `none` means the change is committed in the run's own checkout
+    # and reported, never pushed (ADR-0012).
+    output_repository: https://github.com/jayakumar-devaraj/card-service.git
+    output_branch: main

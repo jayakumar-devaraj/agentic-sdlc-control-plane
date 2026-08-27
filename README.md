@@ -340,10 +340,19 @@ flowchart LR
     R -- "no" --> S["the SDLC graph"]
     R -- "yes" --> D["design"]
     D --> G(["gate:<br/>specialist_design_review"])
-    G -- "approved" --> N["generate"]
     G -- "rejected" --> E(["end"])
-    N --> E
+    G -- "approved" --> N["generate"]
+    N --> RG(["gate:<br/>merge_release_approval"])
+    RG -- "rejected" --> E
+    RG -- "approved" --> P["publish"]
+    P --> E
 ```
+
+Two gates, guarding different things. The first asks about a design — something a reviewer can
+read — before the expensive phase runs. The second guards a repository, and **nothing is committed
+until it approves**, which is why this graph has no rollback: a generate that fails half-way leaves
+an untouched checkout, and a run nobody approves leaves the target project as it found it
+([ADR 0021](docs/adr/0021-nothing-commits-before-the-release-gate.md)).
 
 Routing before the graph rather than inside it is deliberate: the SDLC graph's own first nodes
 gate a brownfield run on a codebase-impact analysis, which is not a decision a reviewer can
@@ -351,8 +360,14 @@ usefully make about a run whose code an external tool will write. See
 [ADR 0019](docs/adr/0019-a-specialist-run-is-its-own-graph.md) and
 [ADR 0020](docs/adr/0020-a-run-is-routed-to-its-graph-before-it-starts.md).
 
-**Nothing is published yet.** A specialist writes into `SPECIALIST_OUTPUT_ROOT`, which is a local
-directory rather than a clone of the target project.
+A route names the project generated code is written into — a *different* repository from the one
+it reads, which stays read-only for the whole run. A route without one still runs and publishes
+nothing, which is the default: publishing to a repository nobody named is the one mistake here that
+cannot be undone by deleting a directory.
+
+Delivery follows `PUBLISH_MODE` exactly as it does for an SDLC run, and defaults to `none` for the
+same reason — the change is committed in the run's own checkout and reported, never pushed. Pushing
+also needs a **write-scoped** `GIT_PAT_FILE` when the target project is private.
 
 ### Code generation modes
 

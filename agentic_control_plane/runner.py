@@ -23,15 +23,17 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from langgraph.types import Command
 
+from pydantic import BaseModel
+
 from agentic_control_plane import workspace
 from agentic_control_plane.graph import build_graph
-from agentic_control_plane.state import GraphState
 
 logger = logging.getLogger(__name__)
 
@@ -89,14 +91,30 @@ def _config(run_id: str) -> dict:
     return {"configurable": {"thread_id": run_id}}
 
 
-def _compiled_for(run_id: str, checkpointer):
-    """Rebuild the compiled graph for a run.
+def sdlc_graph_factory(run_id: str, checkpointer):
+    """This module's original and default graph: the SDLC workflow.
 
     The workspace path is derived from run_id rather than stored, so a resume in a
     different process reconstructs exactly the same binding without consulting
     anything but the run_id it was given.
     """
     return build_graph(workspace.workspace_for(run_id), fixtures_dir(), checkpointer)
+
+
+GraphFactory = Callable[[str, object], object]
+
+
+def _compiled_for(run_id: str, checkpointer, graph_factory: GraphFactory | None = None):
+    """Rebuild the compiled graph for a run.
+
+    `graph_factory` is what makes this module host more than one topology (ADR-0019). It defaults
+    to the SDLC graph, so every existing caller is unchanged and a caller that wants the other one
+    says so. Nothing below this line reads a field either graph does not have: `_interpret` and
+    `_terminal_state_of` classify on `safe_stop` and `run_status`, which are lifecycle rather than
+    workflow, and both states carry them.
+    """
+    factory = graph_factory or sdlc_graph_factory
+    return factory(run_id, checkpointer)
 
 
 def _terminal_state_of(values: dict) -> tuple[str, str]:
@@ -131,11 +149,11 @@ def _interpret(run_id: str, result: dict, snapshot) -> RunResult:
     )
 
 
-def snapshot_for(run_id: str, checkpointer):
-    return _compiled_for(run_id, checkpointer).get_state(_config(run_id))
+def snapshot_for(run_id: str, checkpointer, graph_factory: GraphFactory | None = None):
+    return _compiled_for(run_id, checkpointer, graph_factory).get_state(_config(run_id))
 
 
-def already_known(run_id: str, checkpointer) -> bool:
+def already_known(run_id: str, checkpointer, graph_factory: GraphFactory | None = None) -> bool:
     """Has this run_id ever been checkpointed?
 
     The idempotency check. Drift events are delivered at least once, and the
@@ -143,10 +161,10 @@ def already_known(run_id: str, checkpointer) -> bool:
     redeliveries - so a second delivery of the same condition arrives with a run_id
     that already exists here, and must be acknowledged rather than run again.
     """
-    return snapshot_for(run_id, checkpointer).created_at is not None
+    return snapshot_for(run_id, checkpointer, graph_factory).created_at is not None
 
 
-def is_resumable(run_id: str, checkpointer) -> bool:
+def is_resumable(run_id: str, checkpointer, graph_factory: GraphFactory | None = None) -> bool:
     """Could this run still legitimately continue?
 
     True while work remains - including a run parked at a gate, whose `next` names
@@ -155,37 +173,47 @@ def is_resumable(run_id: str, checkpointer) -> bool:
     `already_known`. Reconciliation deliberately does not, because both answers mean
     the same thing there: the workspace is safe to delete.
     """
-    snapshot = snapshot_for(run_id, checkpointer)
+    snapshot = snapshot_for(run_id, checkpointer, graph_factory)
     return snapshot.created_at is not None and bool(snapshot.next)
 
 
-def parked_since(run_id: str, checkpointer) -> datetime | None:
+def parked_since(run_id: str, checkpointer, graph_factory: GraphFactory | None = None) -> datetime | None:
     """When the current parked checkpoint was written, for TTL purposes."""
-    snapshot = snapshot_for(run_id, checkpointer)
+    snapshot = snapshot_for(run_id, checkpointer, graph_factory)
     if snapshot.created_at is None or not snapshot.next:
         return None
     return datetime.fromisoformat(snapshot.created_at)
 
 
-def start_run(run_id: str, initial_state: GraphState, checkpointer) -> RunResult:
+def start_run(
+    run_id: str,
+    initial_state: BaseModel,
+    checkpointer,
+    graph_factory: GraphFactory | None = None,
+) -> RunResult:
     """Run from the start until the graph parks at a gate or reaches a terminal state.
 
     Returns either way. Never waits for a decision.
     """
-    compiled = _compiled_for(run_id, checkpointer)
+    compiled = _compiled_for(run_id, checkpointer, graph_factory)
     config = _config(run_id)
-    logger.info("Starting run %s (scenario_type=%s)", run_id, initial_state.scenario_type)
+    logger.info("Starting run %s (%s)", run_id, type(initial_state).__name__)
     result = compiled.invoke(initial_state, config=config)
     return _interpret(run_id, result, compiled.get_state(config))
 
 
-def resume_run(run_id: str, decision: dict, checkpointer) -> RunResult:
+def resume_run(
+    run_id: str,
+    decision: dict,
+    checkpointer,
+    graph_factory: GraphFactory | None = None,
+) -> RunResult:
     """Resume a parked run with a human decision, until the next gate or the end.
 
     A run may pass through several gates, so this returning `parked=True` again is
     the normal case, not an error.
     """
-    compiled = _compiled_for(run_id, checkpointer)
+    compiled = _compiled_for(run_id, checkpointer, graph_factory)
     config = _config(run_id)
     snapshot = compiled.get_state(config)
     if snapshot.created_at is None:

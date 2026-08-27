@@ -67,12 +67,20 @@ class RuntimeRequirements(BaseModel):
 
 
 class SpecialistPhase(BaseModel):
-    """One bounded subcommand of an external specialist, and what it needs to run."""
+    """One bounded subcommand of an external specialist, and what it needs to run.
+
+    `timeout_seconds` is per phase because phases are not comparable: one that asks a model for a
+    document and one that drives a compiler through a repair loop differ by an order of
+    magnitude, and a single number for both is either too tight for the second or useless for the
+    first. The default is deliberately generous - a phase killed early leaves a half-written
+    output directory, which is worse than waiting.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     args: list[str] = Field(min_length=1)
     requires: RuntimeRequirements = Field(default_factory=RuntimeRequirements)
+    timeout_seconds: int = Field(default=1800, gt=0)
 
 
 class BuiltinSpecialist(BaseModel):

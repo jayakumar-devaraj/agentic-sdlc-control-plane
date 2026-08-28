@@ -40,17 +40,26 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.1.0`, cut 2026-08-27, the first ref that repository has published.
-  # It was deliberately absent until one existed. Verified from a clean virtualenv before
+  # than a placeholder: `v0.1.1`, cut 2026-08-28. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
   #
-  # Nothing installs it yet. `Dockerfile.specialist` takes it as SPECIALIST_REQUIREMENT
-  # (ADR-0017); the Coder node still stops before invoking anything (ADR-0016 § 5).
+  # **It says v0.1.1 rather than v0.1.0 because the difference is not cosmetic.** `v0.1.0`,
+  # the first ref that repository published, was cut hours before its PR #102 merged, so the
+  # tag does not contain ADR-0059: the refusal of a `step_name` Java cannot take, and the
+  # `solution_architect` v1_1_0 prompt that states the rule. A deployment pinning v0.1.0
+  # installs a specialist that will emit `compute-monthly-interest` and discover the problem
+  # at render time, after a human has approved the design that contains it. The clean-virtualenv
+  # check above is what caught it: `node_prompt_version('solution_architect')` reports the
+  # version the node actually sends, and on v0.1.0 that is v1_0_0.
+  #
+  # `Dockerfile.specialist` takes this same string as SPECIALIST_REQUIREMENT (ADR-0017), and
+  # `docker-compose.specialist.yml` passes it. The two must agree: a routing table naming a
+  # tag the image did not install fails after the design gate, not before it.
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.1.0"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.1.1"
     phases:
       design:
         args: [design]

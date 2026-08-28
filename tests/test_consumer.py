@@ -1218,9 +1218,11 @@ def test_a_specialist_run_is_not_delivered_a_second_time_to_the_tenant_repositor
             run_id="run-spec",
             terminal_state="completed",
             # `specialist` is the field that says which graph this came from - the same read
-            # `graph_for_resume` does, and the only signal either of them uses.
+            # `graph_for_resume` does, and the only signal either of them uses. Its *value* is
+            # deliberately a name no routing table ships: the guard is about any specialist run
+            # reaching here, and naming a real one would imply the behaviour is specific to it.
             values={
-                "specialist": "cobol-modernizer",
+                "specialist": "some-specialist",
                 "commit_sha_after": "6e66ce15",
                 "published": True,
                 "publish_branch": "agentic-patch/run-spec",

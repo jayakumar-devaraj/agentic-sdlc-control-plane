@@ -1,0 +1,84 @@
+# A specialist-capable deployment, as an override rather than a second stack.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.specialist.yml up -d
+#
+# `docker-compose.yml` alone stays exactly what it was: the default image, no specialist
+# runtime, `PUBLISH_MODE: none`. That is the deployment most runs want, and ADR-0017 refused
+# to make the specialist image the default for the same reason this file is separate - the
+# capability costs a gigabyte, a mounted Docker socket and a write-scoped credential, and a
+# deployment that does not route to a specialist should pay none of it.
+#
+# Everything here is an override of the `consumer` service. Compose merges `environment` by
+# key and `volumes` by container path, so the base file's settings survive except where this
+# file names them.
+#
+# Three of the four things this deployment needs cannot live in a committed file:
+#
+#   1. a write-scoped PAT in `secrets/github_pat.txt` - the base file already mounts it and
+#      already sets `GIT_PAT_FILE`, so nothing here changes. What changes is the token: it
+#      needs `contents: read` on the specialist's own repository (the image installs the
+#      wheel from it at build time) and `contents: read and write` on whatever
+#      `output_repository` the routing table names. ADR-0012 calls that widening deliberate.
+#   2. an authenticated `claude` session, via CLAUDE_SESSION_DIR below.
+#   3. a Docker daemon, via the socket mount below. See ADR-0022.
+#
+# The fourth, `PUBLISH_MODE`, is the one this file can supply, and it does.
+
+services:
+  consumer:
+    image: agentic-sdlc-control-plane-specialist:latest
+    build:
+      dockerfile: Dockerfile.specialist
+      args:
+        # The pinned requirement from `config/scenario_specialists.yaml`, repeated here because
+        # the routing table is read at runtime and this is a build input. They must agree: a
+        # routing table naming a tag the image did not install is a run that reaches
+        # `SpecialistInvocationError` after a human has already approved a design.
+        SPECIALIST_REQUIREMENT: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.1.1"
+    environment:
+      # Overrides the base file's `none`. `branch` pushes `agentic-patch/{run_id}` to the
+      # routed `output_repository` after the release gate is approved, and never touches its
+      # default branch. `none` remains correct as the committed default (ADR-0021 section 5) -
+      # this file is the deliberate opt-in, which is the whole reason it is a separate file.
+      PUBLISH_MODE: branch
+      # Named explicitly rather than left to the code default, so the volume below and the
+      # path the code resolves cannot drift apart silently.
+      SPECIALIST_OUTPUT_ROOT: /specialist-output
+      # Testcontainers, run inside this container, talks to the host's daemon and therefore
+      # starts SIBLINGS of this container rather than children. This is the documented setting
+      # for that arrangement.
+      #
+      # UNVERIFIED. ADR-0017 section 5 named exactly this as the open question - "Testcontainers
+      # inside a container talking to the host daemon needs host-path agreement for bind
+      # mounts, and nothing here proves that agreement holds" - and it is still unproven. It is
+      # set because it is the documented answer, not because a run has confirmed it. The first
+      # generating phase that gets this far is the test; if it fails, this line is the first
+      # place to look and ADR-0022 is the place to record what was learned.
+      TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal
+    volumes:
+      # A specialist writes here, and it is deliberately not under WORKSPACES_ROOT -
+      # reconciliation sweeps that root and would delete this (ADR-0009, ADR-0020).
+      - specialist-output:/specialist-output
+
+      # The `claude` session. The image carries the CLI and cannot carry a login: it is
+      # per-operator, and baking one into an image publishes a credential (ADR-0017 section 3).
+      #
+      # Required, with no default, on purpose. `${CLAUDE_SESSION_DIR:-~/.claude}` would have
+      # been friendlier and is refused: the container mounts this READ-WRITE, because the CLI
+      # writes state as it runs, and it also runs a specialist that executes generated code.
+      # Defaulting that at the operator's live session directory would hand it to whatever the
+      # run produces, silently, for the convenience of not typing a path.
+      #
+      # Point it at a directory holding a copy of `.credentials.json` and nothing else. HOME is
+      # `/root` in this image (neither Dockerfile sets USER), which is why the target is
+      # `/root/.claude`; `CLAUDE_CONFIG_DIR` relocates it if a future image runs as someone else.
+      - ${CLAUDE_SESSION_DIR:?set CLAUDE_SESSION_DIR to a directory holding a copy of your claude .credentials.json - see docs/adr/0022}:/root/.claude
+
+      # The generating phase's Testcontainers needs a daemon and this image does not run one.
+      # A mounted socket is effectively root on the host. That cost was recorded rather than
+      # settled by ADR-0017 section 5; ADR-0022 revisits it and this is still the mount, scoped
+      # to a deployment that already holds a write-scoped PAT.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  specialist-output:

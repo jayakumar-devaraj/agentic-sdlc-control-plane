@@ -15,6 +15,11 @@ workspaces/
 # Real secret files - only the .example templates are tracked
 secrets/*.txt
 
+# A copy of the claude CLI's session, if an operator points CLAUDE_SESSION_DIR at a path
+# inside the repo (ADR-0022 recommends one outside it). `.credentials.json` is not a .txt,
+# so the rule above would not have caught it.
+secrets/claude-session/
+
 # Cross-repo planning docs live outside this repo's tree, so they can't normally
 # end up here — this is a defensive backstop in case one is ever copied in by
 # mistake. Never commit these.

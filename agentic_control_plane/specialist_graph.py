@@ -50,7 +50,7 @@ from pathlib import Path
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from agentic_control_plane import publish, specialist_invocation, tools, workspace
+from agentic_control_plane import publish, specialist_invocation, specialists, tools, workspace
 from agentic_control_plane.specialist_state import SpecialistPhaseResult, SpecialistRunState
 from agentic_control_plane.specialists import ExternalSpecialist
 from agentic_control_plane.state import AuditEvent, GateRecord
@@ -105,6 +105,32 @@ def _record(result: specialist_invocation.SpecialistResult, output_path: Path) -
     )
 
 
+def _preflight(
+    state: SpecialistRunState, specialist: ExternalSpecialist, phase_name: str
+) -> dict | None:
+    """Check what the phase declares it needs, before anything is invoked. `None` means go.
+
+    **ADR-0016 wrote this check and nothing on this path called it.** `require_runtime`'s only
+    caller was `nodes/coder.py`, on the SDLC graph - and ADR-0020 routes a specialist run away
+    from that graph before it starts, so no specialist run had ever reached it. Every ADR that
+    describes the preflight as guarding specialist runs was describing an intention.
+
+    An unprovisioned deployment therefore met a missing JDK as an errno from `subprocess`, deep
+    inside a phase, which is the exact outcome `require_runtime` exists to replace with a
+    sentence naming what is absent.
+    """
+    phase = specialist.phases.get(phase_name)
+    if phase is None:
+        # `invoke` reports an unknown phase, and names what the specialist does declare while
+        # doing so. Reporting it twice, worse, here would help nobody.
+        return None
+    try:
+        specialists.require_runtime(state.specialist, phase_name, phase)
+    except specialists.SpecialistRuntimeUnavailableError as exc:
+        return _failure(phase_name, exc)
+    return None
+
+
 def design_node(
     state: SpecialistRunState,
     *,
@@ -113,6 +139,10 @@ def design_node(
 ) -> dict:
     """Run the first phase. Both its inputs resolve inside the run's own clone (ADR-0009)."""
     start = time.monotonic()
+    unavailable = _preflight(state, specialist, DESIGN_PHASE)
+    if unavailable is not None:
+        return unavailable
+
     output_path = tenant_repo / DESIGN_OUTPUT_DIRNAME
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -235,6 +265,14 @@ def generate_node(
     design = state.phases.get(DESIGN_PHASE)
     if design is None:
         return _failure(GENERATE_PHASE, RuntimeError("no design phase result to generate from"))
+
+    # Before the clone below, deliberately. `generate` declares more than `design` does - a JDK,
+    # Maven, a daemon - so this is the phase where a half-provisioned deployment is caught, and
+    # catching it after cloning the output repository would leave a checkout behind for an
+    # environment that was never going to run.
+    unavailable = _preflight(state, specialist, GENERATE_PHASE)
+    if unavailable is not None:
+        return unavailable
 
     design_artifact = Path(design.output_path) / DESIGN_ARTIFACT_NAME
     if not design_artifact.is_file():

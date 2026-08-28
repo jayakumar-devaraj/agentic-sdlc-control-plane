@@ -82,6 +82,19 @@ specialists:
         args: [generate]
         requires:
           # The Java baseline's own test uses Testcontainers, hence the daemon.
+          #
+          # **Observed 2026-08-28 and deliberately left as it is.** The first real run of this
+          # phase compiled and did not test - 15 main classes, 0 test classes, no surefire
+          # directory - so Testcontainers never started and the daemon went unused. Two reasons
+          # not to drop the requirement on that evidence: it is the specialist's own declared
+          # provisioning list (that repo's ADR-0055) and this file should not overrule another
+          # repository's statement of what it needs from one observation of one version; and a
+          # phase that compiles today may test tomorrow, at which point a deployment that was
+          # allowed to skip the daemon fails deep inside Maven instead of at the preflight.
+          #
+          # It does mean the preflight currently demands something this phase does not use. That
+          # is the conservative direction to be wrong in, and it is written down rather than
+          # discovered. ADR-0025.
           executables: [claude, java, mvn]
           docker_daemon: true
 

@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import socket
 import subprocess
 from pathlib import Path
 from typing import Annotated, Literal, Union
@@ -285,8 +286,54 @@ def resolve(table: RoutingTable, repository: str | None) -> Resolution:
     )
 
 
+#: Where a mounted daemon socket conventionally lives, when `DOCKER_HOST` does not say otherwise.
+_DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock"
+
+
+def _docker_socket_path() -> str | None:
+    """The unix socket a daemon would answer on, or None when it is reached some other way.
+
+    `DOCKER_HOST=tcp://...` and docker contexts are the other ways, and only a client knows how
+    to follow them - hence None rather than a guess.
+    """
+    host = os.environ.get("DOCKER_HOST", "")
+    if host.startswith("unix://"):
+        return host[len("unix://") :]
+    if host:
+        return None
+    return _DEFAULT_DOCKER_SOCKET
+
+
+def _daemon_answers_on_socket() -> bool:
+    """Ask the daemon directly, over the socket, the way a library client does.
+
+    **This is what the docstring below has always promised and what the client lookup could not
+    deliver.** A deployment that mounts the host's socket (ADR-0017 § 5, ADR-0022 § 3) has a
+    reachable daemon and frequently no `docker` binary at all - the CLI is a client, nothing in
+    the image needs one, and Testcontainers speaks to the socket over HTTP rather than shelling
+    out. Observed on the first real specialist deployment: the daemon returned `200` on
+    `/version` from inside the container while this function reported it absent.
+    """
+    path = _docker_socket_path()
+    af_unix = getattr(socket, "AF_UNIX", None)
+    if path is None or af_unix is None or not Path(path).exists():
+        return False
+    try:
+        with socket.socket(af_unix, socket.SOCK_STREAM) as sock:
+            sock.settimeout(_DOCKER_PROBE_TIMEOUT_SECONDS)
+            sock.connect(path)
+            sock.sendall(b"GET /_ping HTTP/1.1\r\nHost: docker\r\nConnection: close\r\n\r\n")
+            return b"200 OK" in sock.recv(256)
+    except OSError:
+        return False
+
+
 def _docker_daemon_reachable() -> bool:
     """Probe the daemon, not the client: `docker` on PATH proves nothing about it."""
+    if _daemon_answers_on_socket():
+        return True
+    # A daemon reached any other way - `DOCKER_HOST=tcp://...`, a context, a remote - is only
+    # reachable through the client, so ask it rather than declaring the daemon absent.
     if shutil.which("docker") is None:
         return False
     try:

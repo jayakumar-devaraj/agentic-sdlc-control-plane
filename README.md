@@ -268,6 +268,8 @@ Configuration:
 | `SPECIALIST_ROUTING_FILE` | `config/scenario_specialists.yaml` | Which generator handles which target, and with what model — see below |
 | `SPECIALIST_OUTPUT_ROOT` | `/specialist-output` | Where a routed specialist writes. A separate mount from `WORKSPACES_ROOT` on purpose — reconciliation sweeps that root |
 | `ORCHESTRATOR_MODE` | `replay` | `live` requires a `claude` CLI this image does not install |
+| `CLAUDE_SESSION_DIR` | *(required by the specialist override)* | Host directory holding a copy of the `claude` CLI's `.credentials.json`, mounted read-write at `/root/.claude`. No default, deliberately — see [ADR 0022](docs/adr/0022-a-specialist-capable-deployment-is-an-override-and-three-grants.md) |
+| `TESTCONTAINERS_HOST_OVERRIDE` | *(unset)* | `host.docker.internal` when Testcontainers runs inside a container against the host's daemon. Set by the specialist override; unverified by any run |
 | `PUBLISH_MODE` | `none` | `none` / `branch` / `pull_request`. What happens to an approved change. Anything but `none` needs a **write-scoped** PAT — see [ADR 0012](docs/adr/0012-an-approved-change-must-outlive-the-run-that-made-it.md) |
 | `PARKED_RUN_TTL_HOURS` | `24` | After this, a parked run is reported `stale` and cleaned up |
 | `REPLANNING_CONFLICT_MARKERS` | *(empty)* | Comma-separated module names that count as an existing-functionality conflict |
@@ -500,10 +502,37 @@ docker build -f Dockerfile.specialist -t agentic-sdlc-control-plane-specialist:l
 ```
 
 Omit `SPECIALIST_REQUIREMENT` to build the runtime without any specialist installed, which is what
-CI does — a green build should not depend on another repository's tag resolving.
+CI does — a green build should not depend on another repository's tag resolving. **A build that
+omits it succeeds**, printing one line to stderr, and produces an image whose preflight passes and
+whose specialist is absent: `require_runtime` checks the executables a phase declares, and the
+specialist's own entrypoint is not among them.
 
 **Two things the image cannot provide.** `claude -p` needs an authenticated session, which is
 per-operator and is mounted at runtime, so the preflight passing means the CLI is on `PATH` and not
 that a call will succeed. And the generating phase needs a Docker daemon, which this image does not
 run — mount the host's socket, understanding that doing so is effectively granting root on the
 host. Both are covered in ADR 0017.
+
+### Deploying a specialist-capable consumer
+
+`docker-compose.specialist.yml` overrides the `consumer` service with the image above and the four
+things a specialist run needs that the default deployment does not have
+([ADR 0022](docs/adr/0022-a-specialist-capable-deployment-is-an-override-and-three-grants.md)):
+
+```bash
+CLAUDE_SESSION_DIR=/path/to/a/claude-session docker compose -f docker-compose.yml -f docker-compose.specialist.yml up -d
+```
+
+The base file is unchanged by this — it keeps the default image and `PUBLISH_MODE: none`, so an
+ordinary deployment never carries the socket mount or the write-scoped credential. Two of the four
+are in the override (`PUBLISH_MODE: branch`, the Docker socket) and two are operator-held:
+
+- **`secrets/github_pat.txt` must be write-scoped**, and needs three grants rather than one:
+  `contents: read` on the specialist's own repository, because the image installs the wheel from it
+  at build time; `contents: read and write` on whatever `output_repository` the routing table names;
+  and whatever the event-bus contract build already required.
+- **`CLAUDE_SESSION_DIR` is required and has no default.** Point it at a directory holding a copy of
+  the CLI's `.credentials.json` and nothing else. The mount is read-write, and the container runs
+  generated code — defaulting it at a live `~/.claude` is the reason there is no default.
+
+Build the default image first: `Dockerfile.specialist` starts `FROM` it.

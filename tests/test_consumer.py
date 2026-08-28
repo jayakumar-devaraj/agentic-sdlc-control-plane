@@ -1180,3 +1180,96 @@ def test_a_routed_target_starts_the_specialist_graph_and_parks_on_its_design(
     assert values["specialist"] == "widget-migrator"
     assert values["phases"]["design"].payload["gate_item_count"] == 2
     assert "codebase_impact_review" not in values["gates"]
+
+
+def test_a_specialist_run_is_not_delivered_a_second_time_to_the_tenant_repository(
+    worker_env: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The tenant checkout is read-only for the whole run, and this is what enforces it.
+
+    A specialist run has already delivered, in its own graph's `publish` node, to the OUTPUT
+    repository its route names. `_deliver_if_completed` would deliver a second time and aim at
+    `target.repo_url` - the tenant repository ADR-0009 keeps read-only.
+
+    Observed in run `step49-cbact04c-20260828-144511`: the output push succeeded and a second
+    push to the tenant repository was then attempted and refused 403, purely because that PAT
+    carried no write grant there. Without this guard the guarantee rests on credential scope
+    rather than on this package, so the assertion that matters is the `not calls` one.
+    """
+    monkeypatch.setenv("PUBLISH_MODE", "branch")
+    calls: list[str] = []
+    monkeypatch.setattr(
+        publish,
+        "publish_change",
+        lambda **kwargs: calls.append(kwargs["repo_url"]) or publish.PublishResult(
+            mode="branch", published=True, branch="should-never-be-used"
+        ),
+    )
+    worker = consumer.Worker(build_memory_checkpointer())
+    worker._targets["run-spec"] = consumer._RunTarget(
+        repo_url="https://example.invalid/tenant-service.git",
+        branch="main",
+        scenario_type="brownfield",
+    )
+
+    payload = worker._deliver_if_completed(
+        "run-spec",
+        runner.RunResult(
+            run_id="run-spec",
+            terminal_state="completed",
+            # `specialist` is the field that says which graph this came from - the same read
+            # `graph_for_resume` does, and the only signal either of them uses.
+            values={
+                "specialist": "cobol-modernizer",
+                "commit_sha_after": "6e66ce15",
+                "published": True,
+                "publish_branch": "agentic-patch/run-spec",
+            },
+        ),
+    )
+
+    assert not calls, (
+        "a specialist run must not be published from here at all, and least of all to the "
+        "tenant repository its own ADR-0009 keeps read-only"
+    )
+    assert payload["published"] is True, "delivery is still reported"
+    assert payload["branch"] == "agentic-patch/run-spec", "and it is the OUTPUT repo's branch"
+    assert payload["commit_sha_after"] == "6e66ce15"
+
+
+def test_an_sdlc_run_still_delivers_to_its_tenant_repository(
+    worker_env: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The other half of the guard: SDLC runs are unchanged, and that is the point of the pair.
+
+    A guard that skipped delivery for everything would pass the test above and silently break
+    the path ADR-0012 exists for.
+    """
+    monkeypatch.setenv("PUBLISH_MODE", "branch")
+    calls: list[str] = []
+    monkeypatch.setattr(
+        publish,
+        "publish_change",
+        lambda **kwargs: calls.append(kwargs["repo_url"]) or publish.PublishResult(
+            mode="branch", published=True, branch="agentic-patch/run-sdlc"
+        ),
+    )
+    worker = consumer.Worker(build_memory_checkpointer())
+    worker._targets["run-sdlc"] = consumer._RunTarget(
+        repo_url="https://example.invalid/tenant-service.git",
+        branch="main",
+        scenario_type="brownfield",
+    )
+
+    payload = worker._deliver_if_completed(
+        "run-sdlc",
+        runner.RunResult(
+            run_id="run-sdlc",
+            terminal_state="completed",
+            # No `specialist` key: this is a GraphState, and it delivers as it always did.
+            values={"commit_sha_after": "abc1234"},
+        ),
+    )
+
+    assert calls == ["https://example.invalid/tenant-service.git"]
+    assert payload["published"] is True

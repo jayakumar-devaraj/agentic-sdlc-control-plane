@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -40,6 +41,17 @@ logger = logging.getLogger(__name__)
 #: belongs to is read from this rather than stored beside it: a second record of the same fact is
 #: a second thing that can disagree with the first.
 _SPECIALIST_DISCRIMINATOR = "specialist"
+
+
+def is_specialist_run(values: Mapping[str, object]) -> bool:
+    """Whether these graph values came from a specialist run rather than an SDLC one.
+
+    The same read `graph_for_resume` does, exposed for callers that already hold a run's values
+    and have no checkpoint to consult. One function answers this so a second caller cannot
+    invent a second way of asking - which is the same reason the discriminator above is read off
+    the state instead of being stored beside it.
+    """
+    return _SPECIALIST_DISCRIMINATOR in values
 
 
 def specialist_output_root() -> Path:

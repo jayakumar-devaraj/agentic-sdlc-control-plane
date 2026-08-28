@@ -62,7 +62,20 @@ specialists:
     distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.1.1"
     phases:
       design:
-        args: [design]
+        # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.
+        # ADR-0018 fixes what control-plane appends at four flags, and a COBOL program name is
+        # tenant vocabulary that ADR-0001 forbids the package from carrying. So it lives here,
+        # as data - which is exactly what per-phase `args` is for. See ADR-0023.
+        #
+        # Found by running it, 2026-08-28. The first real invocation exited 2 in three seconds
+        # with `error: the following arguments are required: --programs`, before a single model
+        # call. Every test that predates it drove a stand-in accepting the four flags and asking
+        # for nothing else, so both sides looked complete from inside themselves.
+        #
+        # ONE program, not the four the specialist's own `--help` shows as an example. G7 closes
+        # against a named instance rather than a mechanism, and a first run migrating four
+        # programs cannot say which of them the platform actually handles.
+        args: [design, --programs, CBACT04C]
         requires:
           executables: [claude]
       generate:

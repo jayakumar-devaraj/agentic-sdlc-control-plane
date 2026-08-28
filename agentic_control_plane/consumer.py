@@ -575,10 +575,32 @@ class Worker:
         landed. See docs/adr/0012.
         """
         payload: dict = {}
-        commit_sha_after = (result.values or {}).get("commit_sha_after")
+        values = result.values or {}
+        commit_sha_after = values.get("commit_sha_after")
         if commit_sha_after:
             payload["commit_sha_after"] = commit_sha_after
         if result.terminal_state != "completed":
+            return payload
+
+        # A specialist run has already delivered, in its own graph's `publish` node, to the
+        # OUTPUT repository its route names (ADR-0021 § 1). Delivering here would deliver a
+        # second time and to the wrong place: `workspace_for(run_id)` is the tenant checkout and
+        # `target.repo_url` is the tenant repository, which ADR-0009 keeps read-only for the
+        # whole run.
+        #
+        # **Observed, not reasoned.** Run `step49-cbact04c-20260828-144511` pushed to the output
+        # repository correctly and then attempted a second push to the tenant repository, which
+        # the remote refused with a 403 - refused because that PAT happened to carry no write
+        # grant there. Until this guard, ADR-0009's read-only guarantee was being held up by the
+        # scope of a credential rather than by this package.
+        #
+        # Delivery is still reported, read from what the graph recorded rather than produced by
+        # publishing a second time.
+        if run_routing.is_specialist_run(values):
+            payload["publish_mode"] = publish.publish_mode()
+            payload["published"] = bool(values.get("published", False))
+            if values.get("publish_branch"):
+                payload["branch"] = values["publish_branch"]
             return payload
 
         target = self._targets.get(run_id)

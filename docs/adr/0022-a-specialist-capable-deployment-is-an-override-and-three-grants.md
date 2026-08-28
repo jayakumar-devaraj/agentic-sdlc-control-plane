@@ -132,7 +132,17 @@ override always passes it, so the documented path is safe; a hand-rolled `docker
 Making the preflight check the specialist's own entrypoint would close it and belongs with the
 resolver, not here.
 
-**What is not verified.** No specialist has run. The session mount, the socket mount,
-`TESTCONTAINERS_HOST_OVERRIDE`, and whether the image built from this override can reach a private
-repository at build time are all reasoned rather than exercised. This ADR is the deployment; the run
-that uses it is the evidence, and G7 stays open until a named program has gone through it.
+**The build-time grant is now exercised, and it found a documented command that does not work.**
+Added 2026-08-28, after the write-scoped PAT landed. The override builds and the image carries
+`cobol-modernizer` 0.1.1 on `PATH`, resolving `solution_architect` to `v1_1_0` inside the container,
+with no credential in `/root/.gitconfig`. What broke first was the README's own
+`docker build -t agentic-sdlc-control-plane-consumer:latest .` — a bare `docker build` passes no
+BuildKit secret, so `pip install` cannot clone the private event bus and fails with `could not read
+Username for 'https://github.com'`, several frames below the actual cause. That command was correct
+while `agentic-sdlc-eventbus` was public and has been wrong since; CI never noticed because CI
+passes `--secret`. Compose declares the secret, so building through compose is now the documented
+path.
+
+**What is still not verified.** No specialist has run. The session mount, the socket mount and
+`TESTCONTAINERS_HOST_OVERRIDE` remain reasoned rather than exercised. This ADR is the deployment;
+the run that uses it is the evidence, and G7 stays open until a named program has gone through it.

@@ -496,10 +496,24 @@ deliberately carries none of it — most runs resolve to the built-in generator,
 capable deployment is a customised image rather than a setting
 ([ADR 0017](docs/adr/0017-a-specialist-capable-image-is-a-second-image.md)).
 
+Build both through compose, in this order — `Dockerfile.specialist` starts `FROM` the default image,
+and `SPECIALIST_REQUIREMENT` comes from the override rather than being typed:
+
 ```bash
-docker build -t agentic-sdlc-control-plane-consumer:latest .
-docker build -f Dockerfile.specialist -t agentic-sdlc-control-plane-specialist:latest   --build-arg SPECIALIST_REQUIREMENT="<package> @ git+<url>@<tag>" .
+docker compose build consumer
+CLAUDE_SESSION_DIR=/tmp/placeholder docker compose -f docker-compose.yml -f docker-compose.specialist.yml build consumer
 ```
+
+`CLAUDE_SESSION_DIR` is a placeholder here on purpose: nothing is mounted during a build, but the
+override requires the variable (see below), and compose interpolates the whole file before it
+decides which part of it to act on.
+
+**Use compose rather than a bare `docker build`, and this is not a style preference.** Both
+Dockerfiles install `agentic-events` from `agentic-sdlc-eventbus`, which is private; resolving it
+needs the `github_pat` BuildKit secret that `docker-compose.yml` declares and a bare `docker build`
+does not pass. Without it the build fails inside `pip install` with `could not read Username for
+'https://github.com'` — a git error several frames below the thing that is actually wrong. To build
+by hand, pass it: `--secret id=github_pat,src=secrets/github_pat.txt` (ADR 0015).
 
 Omit `SPECIALIST_REQUIREMENT` to build the runtime without any specialist installed, which is what
 CI does — a green build should not depend on another repository's tag resolving. **A build that
@@ -535,4 +549,4 @@ are in the override (`PUBLISH_MODE: branch`, the Docker socket) and two are oper
   the CLI's `.credentials.json` and nothing else. The mount is read-write, and the container runs
   generated code — defaulting it at a live `~/.claude` is the reason there is no default.
 
-Build the default image first: `Dockerfile.specialist` starts `FROM` it.
+Build both images first, in the order given above.

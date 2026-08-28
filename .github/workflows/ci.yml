@@ -401,6 +401,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Assert the specialist deployment override says what ADR-0022 says it says
+        # Runs before the builds because it needs nothing and it is the cheap half of the
+        # provisioning story. ADR-0022 makes three claims about docker-compose.specialist.yml
+        # that are one careless edit from being false, and a claim in a document is not a check.
+        run: |
+          set -eu
+          BASE=docker-compose.yml
+          OVERRIDE=docker-compose.specialist.yml
+
+          # 1. The override is required to be required. `${CLAUDE_SESSION_DIR:?...}` is the only
+          #    thing standing between an operator and a read-write bind mount of their live
+          #    ~/.claude into a container that runs generated code (ADR-0022 section 2). Losing
+          #    the `:?` would still merge cleanly, which is exactly why it needs asserting.
+          if docker compose -f "$BASE" -f "$OVERRIDE" config >/dev/null 2>&1; then
+            echo "::error::the override merged with CLAUDE_SESSION_DIR unset - see ADR-0022 section 2"
+            exit 1
+          fi
+          echo "CLAUDE_SESSION_DIR is required"
+
+          merged="$(CLAUDE_SESSION_DIR=/tmp/session docker compose -f "$BASE" -f "$OVERRIDE" config)"
+
+          # 2. The base file's default survives the existence of an override that overrides it.
+          #    ADR-0021 section 5 chose `none`, and the failure this catches is someone fixing a
+          #    local deployment by editing the committed default instead of the override.
+          base_only="$(docker compose -f "$BASE" config)"
+          echo "$base_only" | grep -q 'PUBLISH_MODE: none' || {
+            echo "::error::the default deployment no longer publishes nothing - see ADR-0021 section 5"; exit 1; }
+          echo "$merged" | grep -q 'PUBLISH_MODE: branch' || {
+            echo "::error::the specialist override no longer sets PUBLISH_MODE=branch"; exit 1; }
+          echo "PUBLISH_MODE: none by default, branch under the override"
+
+          # 3. The build-time pin and the runtime pin are the same string. They are in two files
+          #    because one is read by docker build and one by the resolver; a disagreement fails
+          #    the run AFTER the design gate, which is the most expensive place in this graph to
+          #    find a provisioning mistake (ADR-0022 section 4).
+          routed="$(sed -n 's/^ *distribution: "\(.*\)"$/\1/p' config/scenario_specialists.yaml)"
+          built="$(echo "$merged" | sed -n 's/^ *SPECIALIST_REQUIREMENT: \(.*\)$/\1/p')"
+          echo "routing table: $routed"
+          echo "image build:   $built"
+          if [ "$routed" != "$built" ]; then
+            echo "::error::the routing table and the image build pin different specialists"
+            exit 1
+          fi
+          echo "one pin, two files, same string"
+
       - name: Write the optional build secret
         # Both builds below install agentic-events from agentic-sdlc-eventbus, whose visibility
         # toggles. Same handling as the compose job and for the same reason (ADR-0015): the real

@@ -72,7 +72,10 @@ A gate can park a run for as long as a human takes to answer, so a poll loop mus
 one — it would exceed `max.poll.interval.ms` and trigger a rebalance that takes every other
 in-flight run on the partition with it. The poll loops therefore only validate and enqueue; the
 worker executes. Parked state lives entirely in Postgres, so a run can be resumed by a different
-process from the one that started it. See `docs/adr/0005`.
+process from the one that started it. See `docs/adr/0005`. That covers the graph's own state and,
+since [ADR 0026](docs/adr/0026-a-runs-delivery-target-outlives-its-process.md), where the run's
+change is delivered — which used to be held only in the starting process's memory, so a restart
+left an approved change unpublished and reported the run `completed` anyway.
 
 ### The graph
 

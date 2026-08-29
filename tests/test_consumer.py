@@ -7,6 +7,7 @@ off, and everything expensive or slow happens somewhere the loop cannot observe.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 import time
@@ -14,13 +15,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
+import psycopg
 import pytest
 
 import subprocess
 import sys
 
 from agentic_control_plane import consumer, events, publish, run_routing, runner, tools, workspace
-from agentic_control_plane.checkpointer import build_memory_checkpointer
+from agentic_control_plane.checkpointer import _postgres_conn_string, build_memory_checkpointer
+from agentic_control_plane.run_targets import PostgresRunTargets
 from agentic_control_plane.telemetry import TelemetrySink, verify_chain
 
 
@@ -1206,10 +1209,13 @@ def test_a_specialist_run_is_not_delivered_a_second_time_to_the_tenant_repositor
         ),
     )
     worker = consumer.Worker(build_memory_checkpointer())
-    worker._targets["run-spec"] = consumer._RunTarget(
-        repo_url="https://example.invalid/tenant-service.git",
-        branch="main",
-        scenario_type="brownfield",
+    worker.targets.record(
+        "run-spec",
+        consumer._RunTarget(
+            repo_url="https://example.invalid/tenant-service.git",
+            branch="main",
+            scenario_type="brownfield",
+        ),
     )
 
     payload = worker._deliver_if_completed(
@@ -1257,10 +1263,13 @@ def test_an_sdlc_run_still_delivers_to_its_tenant_repository(
         ),
     )
     worker = consumer.Worker(build_memory_checkpointer())
-    worker._targets["run-sdlc"] = consumer._RunTarget(
-        repo_url="https://example.invalid/tenant-service.git",
-        branch="main",
-        scenario_type="brownfield",
+    worker.targets.record(
+        "run-sdlc",
+        consumer._RunTarget(
+            repo_url="https://example.invalid/tenant-service.git",
+            branch="main",
+            scenario_type="brownfield",
+        ),
     )
 
     payload = worker._deliver_if_completed(
@@ -1275,3 +1284,179 @@ def test_an_sdlc_run_still_delivers_to_its_tenant_repository(
 
     assert calls == ["https://example.invalid/tenant-service.git"]
     assert payload["published"] is True
+
+
+# --------------------------------------------------------------------------------------
+# A run outlives the process that started it (ADR 0026)
+#
+# These drive a SECOND Worker object over a run the first one started, because that is the
+# real calling position and the only one that catches this. Every test above builds one
+# Worker and keeps it, which is exactly why the defect these cover reached a live
+# deployment: both halves looked complete from inside themselves.
+# --------------------------------------------------------------------------------------
+
+
+def _postgres_reachable() -> bool:
+    if not os.environ.get("POSTGRES_USER"):
+        return False
+    try:
+        with psycopg.connect(_postgres_conn_string(), connect_timeout=3):
+            return True
+    except psycopg.OperationalError:
+        return False
+
+
+needs_postgres = pytest.mark.skipif(
+    not _postgres_reachable(), reason="needs a reachable Postgres; see the README"
+)
+
+
+@pytest.fixture
+def durable_targets():
+    """The store the running control plane uses, cleaned of only this test's rows."""
+    store = PostgresRunTargets(_postgres_conn_string())
+    store.setup()
+    prefix = f"test-{uuid4().hex[:8]}"
+    yield store, prefix
+    with psycopg.connect(_postgres_conn_string(), connect_timeout=3) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM run_targets WHERE run_id LIKE %s", (f"{prefix}%",))
+
+
+@needs_postgres
+def test_a_second_worker_delivers_a_run_the_first_one_started(
+    worker_env: Path, origin: Path, durable_targets, monkeypatch: pytest.MonkeyPatch
+):
+    """The defect, exactly: a restart between the trigger and the release gate.
+
+    Observed on run `drift-eventbus-p95_latency_ms-task1b`, 2026-08-29. The run committed
+    its change, reported `completed`, published nothing, and then had its workspace - the
+    only copy of that commit - deleted. A parked run waits up to the 24h TTL for a human,
+    so crossing a restart is the ordinary case rather than an edge one.
+    """
+    store, prefix = durable_targets
+    run_id = f"{prefix}-delivers"
+    _published(monkeypatch)
+    checkpointer = build_memory_checkpointer()
+
+    starting = consumer.Worker(checkpointer, targets=store)
+    starting.handle_trigger(
+        consumer.TriggerWork(run_id, "brownfield", str(origin), "main", "fix it")
+    )
+    assert runner.is_resumable(run_id, checkpointer) is True
+    del starting  # the process that started the run is gone
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        publish,
+        "publish_change",
+        lambda **kwargs: calls.append(kwargs["repo_url"]) or publish.PublishResult(
+            mode="branch", published=True, branch=f"agentic-patch/{run_id}"
+        ),
+    )
+    resuming = consumer.Worker(checkpointer, targets=store)
+
+    payload = resuming._deliver_if_completed(
+        run_id,
+        runner.RunResult(
+            run_id=run_id,
+            terminal_state="completed",
+            values={"commit_sha_after": "24564efd"},
+        ),
+    )
+
+    assert calls == [str(origin)], (
+        "the approved change must be delivered by whichever process finishes the run"
+    )
+    assert payload["published"] is True
+
+
+@needs_postgres
+def test_a_second_workers_outcome_names_the_real_repository(
+    worker_env: Path, origin: Path, durable_targets, monkeypatch: pytest.MonkeyPatch
+):
+    """The outcome event carried `repo_url: "unknown"` and a null commit, and said completed.
+
+    Worse than the missing delivery, because it is not obviously wrong downstream: a
+    consumer of this topic sees a successful run against a repository that does not exist.
+    """
+    store, prefix = durable_targets
+    run_id = f"{prefix}-outcome"
+    outcomes = _published(monkeypatch)
+
+    starting = consumer.Worker(build_memory_checkpointer(), targets=store)
+    starting.handle_trigger(
+        consumer.TriggerWork(run_id, "brownfield", str(origin), "main", "fix it")
+    )
+    del starting
+
+    resuming = consumer.Worker(build_memory_checkpointer(), targets=store)
+    resuming._publish_outcome(run_id, "completed", detail="run completed")
+
+    assert len(outcomes) == 1
+    envelope = outcomes[0]
+    assert envelope.git_target.repo_url == str(origin)
+    assert envelope.git_target.branch == "main"
+    assert envelope.git_target.commit_sha is not None, (
+        "the commit the clone started from is captured at clone time and must survive"
+    )
+
+
+@needs_postgres
+def test_a_second_worker_still_publishes_audit_events_to_the_topic(
+    worker_env: Path, origin: Path, tmp_path: Path, durable_targets, monkeypatch: pytest.MonkeyPatch
+):
+    """The quieter half of the same defect.
+
+    `_publish_audit` needs the run's git context for the envelope, so a resumed run with no
+    target on record wrote to the local file and stopped publishing to the topic - losing
+    the independent copy ADR 0008 relies on as its anchor, precisely when a restart made the
+    local file least trustworthy.
+    """
+    store, prefix = durable_targets
+    run_id = f"{prefix}-audit"
+    _published(monkeypatch)
+    audited: list = []
+    monkeypatch.setattr(events, "publish_audit_event", audited.append)
+    checkpointer = build_memory_checkpointer()
+
+    starting = consumer.Worker(
+        checkpointer, audit_sink=TelemetrySink(tmp_path / "a" / "runs.jsonl"), targets=store
+    )
+    starting.handle_trigger(
+        consumer.TriggerWork(run_id, "brownfield", str(origin), "main", "fix it")
+    )
+    del starting
+    audited.clear()
+
+    resuming = consumer.Worker(
+        checkpointer, audit_sink=TelemetrySink(tmp_path / "b" / "runs.jsonl"), targets=store
+    )
+    resuming.handle_decision(
+        consumer.DecisionWork(run_id, {"status": "approved", "decided_by": "human"})
+    )
+
+    assert audited, "a resumed run's audit events must still reach the topic"
+    assert all(e.git_target.repo_url == str(origin) for e in audited)
+
+
+@needs_postgres
+def test_a_run_whose_target_cannot_be_recorded_never_starts(
+    worker_env: Path, origin: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Refusal, not a warning: an unrecordable target means an undeliverable run."""
+    outcomes = _published(monkeypatch)
+    checkpointer = build_memory_checkpointer()
+    unreachable = PostgresRunTargets("postgresql://nobody@127.0.0.1:1/nothing")
+    worker = consumer.Worker(checkpointer, targets=unreachable)
+
+    worker.handle_trigger(
+        consumer.TriggerWork("run-unrecordable", "brownfield", str(origin), "main", "fix it")
+    )
+
+    assert runner.is_resumable("run-unrecordable", checkpointer) is False, (
+        "nothing may start before its delivery target is durable"
+    )
+    assert not workspace.workspace_for("run-unrecordable").exists()
+    assert len(outcomes) == 1
+    assert outcomes[0].payload["terminal_state"] == "failed"

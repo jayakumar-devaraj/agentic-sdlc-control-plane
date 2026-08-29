@@ -23,7 +23,7 @@ import threading
 import time
 from pathlib import Path
 
-from agentic_control_plane import consumer, events, inbox, runner, workspace
+from agentic_control_plane import consumer, events, inbox, run_targets, runner, workspace
 from agentic_control_plane.checkpointer import _postgres_conn_string, build_postgres_checkpointer
 from agentic_control_plane.logging_config import configure_logging
 from agentic_control_plane.telemetry import TelemetrySink
@@ -89,8 +89,17 @@ def main() -> None:
         work_inbox = inbox.Inbox(_postgres_conn_string())
         work_inbox.setup()
 
+        # Durable for the same reason the inbox is, one level up: a parked run outlives
+        # this process routinely, and where to deliver its change must outlive it too.
+        # See ADR 0026.
+        targets = run_targets.PostgresRunTargets(_postgres_conn_string())
+        targets.setup()
+
         worker = consumer.Worker(
-            checkpointer, audit_sink=TelemetrySink(audit_log_path()), inbox=work_inbox
+            checkpointer,
+            audit_sink=TelemetrySink(audit_log_path()),
+            inbox=work_inbox,
+            targets=targets,
         )
         # Before the poll loops start, so work the previous process accepted and did
         # not finish is handled ahead of anything newly consumed.

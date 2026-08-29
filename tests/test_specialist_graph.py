@@ -17,15 +17,17 @@ from pathlib import Path
 import pytest
 from langgraph.types import Command
 
-from agentic_control_plane import tools
+from agentic_control_plane import specialist_graph, specialist_invocation, tools
 from agentic_control_plane.checkpointer import build_memory_checkpointer
 from agentic_control_plane.specialist_graph import (
     DESIGN_ARTIFACT_NAME,
     DESIGN_GATE,
     DESIGN_OUTPUT_DIRNAME,
     build_specialist_graph,
+    design_node,
+    generate_node,
 )
-from agentic_control_plane.specialist_state import SpecialistRunState
+from agentic_control_plane.specialist_state import SpecialistPhaseResult, SpecialistRunState
 from agentic_control_plane.specialists import ExternalSpecialist, SpecialistPhase
 
 # Writes the artifact the second phase needs, then answers on the contract.
@@ -584,3 +586,92 @@ def test_a_commit_that_fails_stops_the_run_rather_than_reporting_a_publish(
     assert result["run_status"] == "failed"
     assert "published" not in result
     assert any("index.lock" in event.detail for event in result["events"])
+
+
+def test_a_phase_whose_runtime_is_absent_stops_before_invoking_anything(
+    tmp_path: Path, paths, monkeypatch: pytest.MonkeyPatch
+):
+    """The preflight ADR-0016 wrote, on the path that never called it.
+
+    `require_runtime`'s only caller was the SDLC graph's coder node, and ADR-0020 routes a
+    specialist run away from that graph before it starts - so no specialist run had ever reached
+    it. Every existing test here passes with or without the check, because none of their phases
+    declares a requirement. This one declares one that cannot be satisfied.
+    """
+    tenant_repo, output_repo = paths
+    specialist = write_specialist(tmp_path, DESIGN_BODY, GENERATE_BODY)
+    specialist.phases["design"].requires.executables = ["a-compiler-nobody-installed"]
+
+    invoked: list[str] = []
+    monkeypatch.setattr(
+        specialist_invocation,
+        "invoke",
+        lambda **kwargs: invoked.append(kwargs["phase_name"]),
+    )
+
+    result = design_node(initial(), specialist=specialist, tenant_repo=tenant_repo)
+
+    assert not invoked, "the point of a preflight is that nothing runs"
+    assert result["safe_stop"] is True
+    assert result["run_status"] == "failed"
+    detail = json.dumps(result, default=str)
+    assert "a-compiler-nobody-installed" in detail, "what is absent is named, not implied"
+
+
+def test_generate_checks_its_runtime_before_cloning_the_output_repository(
+    tmp_path: Path, paths, monkeypatch: pytest.MonkeyPatch
+):
+    """Ordering, asserted: an environment that cannot run the phase never gets a checkout.
+
+    `generate` declares more than `design` does - a JDK, a build tool, a daemon - so it is where
+    a half-provisioned deployment is caught. Catching it after the clone would leave a checkout
+    behind for a run that was never going to proceed.
+    """
+    tenant_repo, output_repo = paths
+    specialist = write_specialist(tmp_path, DESIGN_BODY, GENERATE_BODY)
+    specialist.phases["generate"].requires.executables = ["a-compiler-nobody-installed"]
+
+    cloned: list[str] = []
+    monkeypatch.setattr(
+        specialist_graph,
+        "ensure_output_checkout",
+        lambda *a, **k: cloned.append("clone"),
+    )
+
+    # A real design artifact, so the check above the preflight passes and the clone is genuinely
+    # the next thing that would happen. Without it this test would short-circuit on a missing
+    # design and assert nothing about ordering at all.
+    design_dir = tenant_repo / DESIGN_OUTPUT_DIRNAME
+    design_dir.mkdir(parents=True, exist_ok=True)
+    (design_dir / DESIGN_ARTIFACT_NAME).write_text("{}", encoding="utf-8")
+
+    state = initial()
+    state.phases = {
+        "design": SpecialistPhaseResult(
+            phase="design",
+            status="ok",
+            detail="",
+            output_path=str(design_dir),
+        )
+    }
+    result = generate_node(
+        state,
+        specialist=specialist,
+        tenant_repo=tenant_repo,
+        output_repo=output_repo,
+        output_repository="https://example.invalid/out.git",
+    )
+
+    assert not cloned, "no checkout for an environment that cannot run the phase"
+    assert result["run_status"] == "failed"
+    assert "a-compiler-nobody-installed" in json.dumps(result, default=str)
+
+
+def test_the_preflight_defers_an_unknown_phase_to_the_invoker(tmp_path: Path, paths):
+    """Not an oversight: `invoke` reports an unknown phase and names what the specialist does
+    declare while doing so, which is strictly more useful than anything this could say.
+    """
+    tenant_repo, _ = paths
+    specialist = write_specialist(tmp_path, DESIGN_BODY, GENERATE_BODY)
+
+    assert specialist_graph._preflight(initial(), specialist, "a-phase-that-does-not-exist") is None

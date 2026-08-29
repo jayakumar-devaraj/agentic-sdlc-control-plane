@@ -32,6 +32,25 @@ from agentic_control_plane.specialists import (
     routing_file,
 )
 
+
+#: Captured before the autouse fixture below can replace it, for the one test that wants the
+#: real probe rather than a stub.
+_REAL_SOCKET_PROBE = specialists._daemon_answers_on_socket
+
+
+@pytest.fixture(autouse=True)
+def no_mounted_daemon_socket(monkeypatch: pytest.MonkeyPatch):
+    """No mounted daemon socket unless a test asks for one.
+
+    `_docker_daemon_reachable` asks the socket before it asks the client (ADR-0025), so without
+    this every "no daemon" assertion below would pass on a developer's machine and fail on any
+    CI runner with a real `/var/run/docker.sock` - which is most of them. Neutralised by default
+    rather than per test, so the tests that follow stay about the *client* fallback they were
+    written for. The socket probe has tests of its own, which patch this back.
+    """
+    monkeypatch.setattr(specialists, "_daemon_answers_on_socket", lambda: False)
+
+
 MINIMAL = """
 version: 1
 specialists:
@@ -367,3 +386,126 @@ def test_require_runtime_is_silent_when_the_environment_satisfies_the_phase(
 def test_a_phase_with_no_declared_requirements_needs_nothing(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(specialists.shutil, "which", lambda name: None)
     require_runtime("widget-migrator", "plan", SpecialistPhase(args=["plan"]))
+
+
+def test_a_mounted_socket_is_a_reachable_daemon_with_no_client_installed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The deployment this was found on: socket mounted, no `docker` binary anywhere.
+
+    ADR-0017 section 5 mounts the host's socket and installs no client, because nothing in the
+    image needs one - Testcontainers speaks HTTP over the socket rather than shelling out. The
+    old probe opened with a `shutil.which` lookup and therefore reported "no daemon" while the
+    daemon was answering `200` on that very socket.
+    """
+    monkeypatch.setattr(specialists, "_daemon_answers_on_socket", lambda: True)
+    monkeypatch.setattr(specialists.shutil, "which", lambda name: None)
+
+    assert missing_requirements(RuntimeRequirements(docker_daemon=True)) == []
+
+
+def test_the_client_is_still_asked_when_the_socket_says_nothing(monkeypatch: pytest.MonkeyPatch):
+    """A daemon on `DOCKER_HOST=tcp://...` is reachable only through a client, so keep asking."""
+    monkeypatch.setattr(specialists, "_daemon_answers_on_socket", lambda: False)
+    monkeypatch.setattr(specialists.shutil, "which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(
+        specialists.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(a[0], returncode=0, stdout="29.6.1", stderr=""),
+    )
+
+    assert missing_requirements(RuntimeRequirements(docker_daemon=True)) == []
+
+
+def test_a_tcp_docker_host_has_no_socket_to_probe(monkeypatch: pytest.MonkeyPatch):
+    """Guessing `/var/run/docker.sock` when DOCKER_HOST names something else would be a lie."""
+    monkeypatch.setenv("DOCKER_HOST", "tcp://192.0.2.10:2375")
+    assert specialists._docker_socket_path() is None
+
+
+def test_a_unix_docker_host_names_the_socket_to_probe(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("DOCKER_HOST", "unix:///run/user/1000/docker.sock")
+    assert specialists._docker_socket_path() == "/run/user/1000/docker.sock"
+
+
+def test_an_unset_docker_host_falls_back_to_the_conventional_socket(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    assert specialists._docker_socket_path() == "/var/run/docker.sock"
+
+
+def test_an_absent_socket_file_is_not_probed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """No connect attempt, no exception to swallow - the file simply is not there.
+
+    Calls the captured original rather than the module attribute, because the autouse fixture
+    above has replaced that attribute with a stub. This is the one test that wants the real one.
+    """
+    monkeypatch.setenv("DOCKER_HOST", f"unix://{tmp_path / 'nothing.sock'}")
+    assert _REAL_SOCKET_PROBE() is False
+
+
+class _FakeSocket:
+    """Enough of a socket to answer the probe, without needing AF_UNIX on the test platform."""
+
+    def __init__(self, response: bytes = b"", error: Exception | None = None):
+        self._response = response
+        self._error = error
+        self.sent = b""
+        self.connected: str | None = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def settimeout(self, _seconds):
+        pass
+
+    def connect(self, path):
+        if self._error is not None:
+            raise self._error
+        self.connected = path
+
+    def sendall(self, data):
+        self.sent += data
+
+    def recv(self, size):
+        return self._response[:size]
+
+
+def _with_socket(monkeypatch, tmp_path, fake: _FakeSocket):
+    sock_path = tmp_path / "docker.sock"
+    sock_path.write_bytes(b"")  # the probe only checks that the path exists before connecting
+    monkeypatch.setenv("DOCKER_HOST", f"unix://{sock_path}")
+    monkeypatch.setattr(specialists.socket, "AF_UNIX", 1, raising=False)
+    monkeypatch.setattr(specialists.socket, "socket", lambda *a, **k: fake)
+    return sock_path
+
+
+def test_the_socket_probe_asks_the_daemon_and_reads_its_answer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    fake = _FakeSocket(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+    sock_path = _with_socket(monkeypatch, tmp_path, fake)
+
+    assert _REAL_SOCKET_PROBE() is True
+    assert fake.connected == str(sock_path)
+    assert b"GET /_ping" in fake.sent, "the daemon's own liveness endpoint, not an inference"
+
+
+def test_a_socket_answering_anything_but_200_is_not_a_reachable_daemon(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Something is listening on that path. That is not the same as a daemon."""
+    _with_socket(monkeypatch, tmp_path, _FakeSocket(b"HTTP/1.1 500 Internal Server Error\r\n\r\n"))
+    assert _REAL_SOCKET_PROBE() is False
+
+
+def test_a_socket_that_refuses_the_connection_is_not_a_reachable_daemon(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """A stale socket file outlives its daemon, which is exactly when this must not lie."""
+    _with_socket(monkeypatch, tmp_path, _FakeSocket(error=ConnectionRefusedError("nobody home")))
+    assert _REAL_SOCKET_PROBE() is False

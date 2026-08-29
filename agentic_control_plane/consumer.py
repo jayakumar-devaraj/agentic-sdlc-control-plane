@@ -51,6 +51,7 @@ from agentic_events import EventEnvelope
 
 from agentic_control_plane import events, heartbeat, publish, run_routing, runner, workspace
 from agentic_control_plane.inbox import payload_of
+from agentic_control_plane.run_targets import InMemoryRunTargets, RunTarget
 from agentic_control_plane.telemetry import TelemetrySink, render_console_line
 
 logger = logging.getLogger(__name__)
@@ -106,19 +107,10 @@ def _kind_of(work) -> str:
     return "trigger" if isinstance(work, TriggerWork) else "decision"
 
 
-@dataclass
-class _RunTarget:
-    """What an outcome event needs, kept for the life of a run.
-
-    commit_sha_before is captured once, at clone time, and a run reaches its
-    terminal state on a later slice - after a gate, in a different call, possibly in
-    a different process. Holding it here is what stops it being lost in between.
-    """
-
-    repo_url: str
-    branch: str
-    scenario_type: str
-    commit_sha_before: str | None = None
+#: Re-exported under its long-standing private name so callers here read unchanged. The
+#: definition moved to `run_targets` when it stopped being a value this module could keep
+#: in memory - see ADR 0026.
+_RunTarget = RunTarget
 
 
 def build_trigger_consumer(bootstrap_servers: str):
@@ -270,7 +262,13 @@ class Worker:
     length of a human's attention span is ever observable from a poll loop.
     """
 
-    def __init__(self, checkpointer, audit_sink: TelemetrySink | None = None, inbox=None) -> None:
+    def __init__(
+        self,
+        checkpointer,
+        audit_sink: TelemetrySink | None = None,
+        inbox=None,
+        targets=None,
+    ) -> None:
         self.checkpointer = checkpointer
         self.audit_sink = audit_sink
         # Optional so tests can run without Postgres. The running control plane always
@@ -279,7 +277,12 @@ class Worker:
         self.queue: queue.Queue = queue.Queue(maxsize=WORK_QUEUE_MAXSIZE)
         # Enough to publish an outcome for a run whose workspace is already gone:
         # repo, branch, scenario_type, and the commit the clone started from.
-        self._targets: dict[str, _RunTarget] = {}
+        #
+        # Defaults to the process-local store rather than requiring one, for the same
+        # reason `inbox` does. `main` wires the durable store; a default that outlived
+        # nothing is what ADR 0026 was written about, so the running control plane must
+        # not be able to get it by accident.
+        self.targets = targets if targets is not None else InMemoryRunTargets()
 
     def submit(self, work) -> bool:
         """Record the work durably, then enqueue it. False if it cannot be accepted.
@@ -377,7 +380,23 @@ class Worker:
             return
 
         target = _RunTarget(work.repo_url, work.branch, work.scenario_type)
-        self._targets[work.run_id] = target
+        # Before the clone, so the clone-failure path below still has a repository to name
+        # in its outcome. Recorded again after a successful clone, once the commit it
+        # started from is knowable.
+        try:
+            self.targets.record(work.run_id, target)
+        except Exception as exc:
+            # Refusal rather than a warning, and nothing has happened yet: no workspace, no
+            # checkpoint. Starting a run whose delivery target was not written down is the
+            # loss ADR 0026 exists to prevent, and it is a silent one - the run would report
+            # `completed` and discard the change.
+            logger.error("Could not record the delivery target for run %s: %s", work.run_id, exc)
+            self._publish_outcome(
+                work.run_id,
+                "failed",
+                detail=f"could not record the run's delivery target: {exc}",
+            )
+            return
 
         try:
             _path, target.commit_sha_before = workspace.clone_for_run(
@@ -387,6 +406,7 @@ class Worker:
             logger.error("Clone failed for run %s: %s", work.run_id, exc)
             self._publish_outcome(work.run_id, "clone_failed", detail=str(exc))
             return
+        self._record_target(work.run_id, target)
 
         # Routed here rather than inside the graph, because the graph's own first three nodes
         # assume the built-in generator: a brownfield run parks at `codebase_impact_review`
@@ -454,6 +474,23 @@ class Worker:
             self._fail_run(work.run_id, exc)
             return
         self._after_slice(work.run_id, result)
+
+    def _record_target(self, run_id: str, target: RunTarget) -> None:
+        """Update a target already on record, without being able to fail the run.
+
+        The opposite policy from the first write in `handle_trigger`, and deliberately so.
+        That one refuses, because nothing is recorded and nothing has started. This one
+        only adds `commit_sha_before` to a row that already names the repository and
+        branch, so its failure costs a null commit on one outcome event - not a delivery.
+        """
+        try:
+            self.targets.record(run_id, target)
+        except Exception:
+            logger.exception(
+                "Could not update the delivery target for run %s; its outcome will report "
+                "a null starting commit",
+                run_id,
+            )
 
     def _fail_run(self, run_id: str, exc: Exception) -> None:
         """Report a run that died inside graph execution, and clean up after it.
@@ -540,11 +577,16 @@ class Worker:
         audit file; what is lost is the independent copy, which is a degraded
         guarantee rather than a failed run.
         """
-        target = self._targets.get(run_id)
+        target = self.targets.get(run_id)
         if target is None:
-            # A slice with no target on record - a decision for a run this process did
-            # not start. The file sink still has the events; only the topic copy needs
-            # the git context the envelope requires.
+            # A slice with no target on record. The file sink still has the events; only
+            # the topic copy needs the git context the envelope requires.
+            #
+            # This used to be reached by every run resumed in a different process from the
+            # one that started it, which silently cost the audit trail the independent copy
+            # ADR 0008 relies on as its anchor - exactly when a restart made the local file
+            # least trustworthy. With a durable target it is back to meaning what the
+            # comment always claimed: a decision for a run this deployment never started.
             return
         for event in new_events:
             try:
@@ -603,7 +645,7 @@ class Worker:
                 payload["branch"] = values["publish_branch"]
             return payload
 
-        target = self._targets.get(run_id)
+        target = self.targets.get(run_id)
         if target is None:
             logger.warning("Run %s completed with no target on record; not publishing", run_id)
             return payload
@@ -628,7 +670,7 @@ class Worker:
         terminal state is reached on a later slice whose caller had no access to it,
         and so passed None. Every completed run reported a null commit.
         """
-        target = self._targets.get(run_id) or _RunTarget("unknown", "unknown", "brownfield")
+        target = self.targets.get(run_id) or _RunTarget("unknown", "unknown", "brownfield")
         envelope = events.build_run_outcome(
             run_id=run_id,
             terminal_state=terminal_state,
@@ -640,7 +682,7 @@ class Worker:
             extra_payload=extra_payload,
         )
         events.publish_run_outcome(envelope)
-        self._targets.pop(run_id, None)
+        self.targets.forget(run_id)
         # Retire the run's audit cursor alongside its target. Both are per-run state
         # on a process-lifetime object, and a cursor left behind here is what made
         # every run after the first go unaudited - see docs/adr/0011.

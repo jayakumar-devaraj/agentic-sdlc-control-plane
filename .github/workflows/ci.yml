@@ -12,11 +12,36 @@ name: ci
 # This is separate from the RUNTIME PAT the service uses to clone tenant
 # repositories. CI never performs a real clone, so it needs no runtime credential.
 
+# WHY THERE IS NO `push: branches: [main]` TRIGGER.
+#
+# There was, and it doubled this repository's bill for nothing. Measured across the last ten
+# merged PRs: every `pull_request` run was followed by a `push main` run of the same length,
+# because merging is what produced the push. GitHub already runs pull-request checks against the
+# MERGE RESULT rather than the branch tip, so the tree that lands on `main` is the tree the PR
+# just tested - re-testing it is paying twice for one answer.
+#
+# **The gap that leaves, stated rather than hidden:** the merge result is only the merged tree if
+# `main` has not moved between the check and the merge. Enable branch protection's *"Require
+# branches to be up to date before merging"* to close it. This platform merges one PR at a time
+# (CLAUDE.md: "Only then start the next task"), so the window is already narrow, but a settings
+# toggle is a better guarantee than a habit.
+#
+# `workflow_dispatch` is the escape hatch: run this on `main` by hand whenever that is actually
+# wanted - after a settings change, or to confirm a suspicion - instead of on every merge forever.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+# One run per pull request. A second push to the same branch cancels the run the first one started
+# rather than paying for both to finish - three superseded runs on one branch were observed in the
+# history this was written against.
+#
+# The key falls back to `run_id` off a pull request, which is unique per run, so a manual
+# `workflow_dispatch` is never cancelled by the next one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -51,6 +76,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          # Every run installed this repository's dependencies cold. They are pinned in
+          # requirements.txt, so the wheels are identical between runs and there is nothing to
+          # gain from re-downloading them.
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Configure a git identity for the workspace tests
         # tools.git_commit_all sets a per-repo identity, but git also needs a

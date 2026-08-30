@@ -21,8 +21,11 @@
 #      `output_repository` the routing table names. ADR-0012 calls that widening deliberate.
 #   2. an authenticated `claude` session, via CLAUDE_SESSION_DIR below.
 #   3. a Docker daemon, via the socket mount below. See ADR-0022.
+#   4. a tracing collector, via the two `OTEL_*` variables below - the header carries a
+#      credential, and the endpoint is deployment-specific. Unlike the three above, this one is
+#      optional: unset means the specialist emits no spans and constructs no exporter.
 #
-# The fourth, `PUBLISH_MODE`, is the one this file can supply, and it does.
+# `PUBLISH_MODE` is the one of the five this file can supply outright, and it does.
 
 services:
   consumer:
@@ -34,7 +37,7 @@ services:
         # the routing table is read at runtime and this is a build input. They must agree: a
         # routing table naming a tag the image did not install is a run that reaches
         # `SpecialistInvocationError` after a human has already approved a design.
-        SPECIALIST_REQUIREMENT: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.1.1"
+        SPECIALIST_REQUIREMENT: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.1.2"
     environment:
       # Overrides the base file's `none`. `branch` pushes `agentic-patch/{run_id}` to the
       # routed `output_repository` after the release gate is approved, and never touches its
@@ -55,6 +58,24 @@ services:
       # generating phase that gets this far is the test; if it fails, this line is the first
       # place to look and ADR-0022 is the place to record what was learned.
       TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal
+
+      # Tracing for the specialist subprocess, which inherits this container's environment.
+      # Both default to empty, and empty means off: the specialist constructs no exporter
+      # unless an endpoint is named (its ADR-0046 and ADR-0060), so a deployment that wants no
+      # telemetry sets nothing and pays nothing.
+      #
+      # Passed through from the operator's environment rather than written here, for two
+      # different reasons. The header carries a credential, and this file is committed. The
+      # endpoint is deployment-specific and, from inside this container, `localhost` is this
+      # container - a collector on the developer's machine is reached at
+      # `http://host.docker.internal:3000/api/public/otel`, and a `localhost` copied from a
+      # browser's address bar produces a connection refused that looks like a broken collector.
+      #
+      # These are OpenTelemetry's own standard variable names, not this platform's. That is the
+      # point: no file in either repository names a tracing backend, so changing where spans go
+      # is a variable rather than a code change.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
     volumes:
       # A specialist writes here, and it is deliberately not under WORKSPACES_ROOT -
       # reconciliation sweeps that root and would delete this (ADR-0009, ADR-0020).

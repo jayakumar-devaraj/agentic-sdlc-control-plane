@@ -40,9 +40,18 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.1.1`, cut 2026-08-28. Verified from a clean virtualenv before
+  # than a placeholder: `v0.1.2`, cut 2026-08-29. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
+  #
+  # **v0.1.2 rather than v0.1.1 is what makes a specialist run observable at all.** That
+  # repository's ADR-0046 decided to emit OpenTelemetry spans from `call_model` and its two
+  # CLI entrypoints; until its PR #104 the decision was accepted and unimplemented, and the
+  # only instrumentation that existed was a local dev-harness monkey-patch loaded by
+  # `langgraph dev`. This image runs the CLI, not that harness, so a deployment pinning
+  # v0.1.1 emits no spans however it is configured. Tracing is off unless the environment
+  # names a collector, so the pin costs nothing when it is not wanted - see
+  # `docker-compose.specialist.yml` for the two variables that turn it on.
   #
   # **It says v0.1.1 rather than v0.1.0 because the difference is not cosmetic.** `v0.1.0`,
   # the first ref that repository published, was cut hours before its PR #102 merged, so the
@@ -59,7 +68,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.1.1"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.1.2"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

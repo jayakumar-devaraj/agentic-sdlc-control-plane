@@ -30,3 +30,24 @@ secrets/claude-session/
 # CI does this on every run; nothing here is ever a build input.
 node_modules/
 package-lock.json
+
+# ---------------------------------------------------------------------------
+# LangGraph Dev / LangGraph Studio - LOCAL ONLY, NEVER COMMITTED.
+#
+# Everything the local dev server needs lives in one directory, so one rule
+# covers the config, the Studio entrypoint module, the .env, and the per-thread
+# workspaces runs write. .langgraph-dev/.gitignore repeats the exclusion from
+# the inside as a backstop.
+.langgraph-dev/
+
+# The dev server's own local state: it pickles threads/runs/assistants into
+# .langgraph_api/ beside wherever it was started, so ignore it at any depth in
+# case the server is launched from the repo root rather than from .langgraph-dev/.
+.langgraph_api/
+**/.langgraph_api/
+
+# A langgraph.json accidentally created at the repo root (e.g. by `langgraph new`
+# or by copying the config out of .langgraph-dev/). This repository ships no
+# LangGraph Platform config; the only one that exists is the ignored local copy.
+/langgraph.json
+.langgraph-dev.env

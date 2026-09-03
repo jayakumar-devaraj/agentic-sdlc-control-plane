@@ -1,0 +1,81 @@
+name: security
+
+# WHY THIS RUNS ON A SCHEDULE RATHER THAN ON EVERY PULL REQUEST.
+#
+# A dependency CVE is published on the world's timetable, not on this repository's. A
+# vulnerability disclosed today affects the pins on `main` whether or not anyone opened a
+# pull request, and a per-PR trigger would answer the same question repeatedly on days
+# nothing changed while answering it not at all on days nothing was merged. A schedule
+# matches the thing being detected.
+#
+# It is also the cheap option, which matters here: this repository is PRIVATE, so Actions
+# minutes come out of the account allowance rather than being free the way they are on a
+# public repo (that applies to agentic-sdlc-eventbus and to nothing else in this platform).
+#
+# **Never make this workflow's check a required status check.** It does not run on
+# `pull_request`, so it reports no status on a PR at all, and requiring a context nothing
+# reports leaves every pull request blocked forever waiting for it.
+on:
+  schedule:
+    # Mondays, 06:00 UTC. Any fixed time is arbitrary; this one is stated so a missing run
+    # is noticeable rather than assumed.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    name: dependency-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install the pinned dependencies, minus the one audited elsewhere
+        # `agentic-events` is stripped rather than installed. It is a git dependency on
+        # agentic-sdlc-eventbus, and installing it here would make this job's success
+        # depend on that repository's visibility and on an optional PAT - the whole
+        # apparatus the `ci` workflow needs a 60-line step for (ADR-0015). That package is
+        # audited in its own repository, which is where its pins live.
+        #
+        # Everything else installs for real, and the audit below then covers the
+        # TRANSITIVE tree rather than only the nine names requirements.txt happens to
+        # write down. Auditing the file directly would miss exactly where CVEs live.
+        run: |
+          grep -v '^agentic-events' requirements.txt > /tmp/requirements.audit.txt
+          echo "--- auditing these ---"
+          grep -vE '^\s*#|^\s*$' /tmp/requirements.audit.txt
+          pip install --quiet -r /tmp/requirements.audit.txt
+          pip install --quiet pip-audit
+
+      - name: pip-audit the installed environment
+        # Exit code is the gate. pip-audit exits non-zero when it finds a vulnerability,
+        # and this step does not swallow it behind a pipe.
+        run: pip-audit --strict --progress-spinner off
+
+# WHAT THIS WORKFLOW DELIBERATELY DOES NOT DO, and why - so the gaps are known rather
+# than mistaken for coverage:
+#
+# 1. **No CodeQL.** Code scanning on a PRIVATE repository requires GitHub Advanced
+#    Security. This account does not have it - the same plan limit that makes
+#    `/repos/.../rules/branches/main` answer 403 - so a CodeQL job here would fail on
+#    upload rather than protect anything. Revisit if this repository goes public, where
+#    CodeQL is free.
+#
+# 2. **No third-party secret scanner.** GitHub's native secret scanning also needs
+#    Advanced Security on a private repo, and a bolted-on scanner would be checking
+#    something three structural controls already cover: `.gitignore` excludes
+#    `secrets/*.txt`, `secrets/claude-session/`, `.env` and
+#    `docker-compose.override.yml`; only `.example` templates are tracked; and the `ci`
+#    workflow's "Assert the built image carries no credential" step reads
+#    /root/.gitconfig's size in both images. Verified rather than assumed - every path
+#    ever added to this repository was listed, and no credential file appears in the
+#    history. Worth adding the day that stops being true.

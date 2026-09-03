@@ -1,0 +1,46 @@
+# Update signal for the pins this repository carries. There was none before: the default
+# Dockerfile pins python:3.12-slim, Dockerfile.specialist pins a JDK, a Maven, a Node and
+# an npm package, and requirements.txt pins nine Python packages exactly - all of them
+# security-relevant, none of them announcing when they move.
+#
+# **Cadence is monthly, not weekly, and the PR limits are low, deliberately.** This
+# repository is PRIVATE, so Actions minutes come out of the account allowance rather than
+# being free the way they are on a public repo. Every Dependabot PR triggers the full `ci`
+# workflow - three jobs, one of which builds two container images. Weekly updates across
+# three ecosystems would spend more on checking for updates than this repository spends on
+# its own changes. Monthly, grouped, and capped is the same signal at a fraction of it.
+version: 2
+updates:
+  # Nine exact pins, one of which (pydantic) is constrained by the shared contract package
+  # and cannot move on its own - see the comment in requirements.txt. Expect Dependabot to
+  # propose a pydantic bump that has to be closed until agentic-events is re-released.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      # One PR for the whole set rather than one per package: nine separate PRs is nine
+      # full CI runs to answer one question.
+      python-dependencies:
+        patterns: ["*"]
+
+  # Tracks the `FROM` in Dockerfile (python:3.12-slim). It does NOT track
+  # Dockerfile.specialist's JDK, Maven or Node: those are fetched by curl from pinned
+  # ARG versions rather than declared as base images, and that file's own FROM is a build
+  # arg. Those four pins stay manual - stated here so their absence is a known gap rather
+  # than an assumption that this file covers them.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      actions:
+        patterns: ["*"]

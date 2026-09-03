@@ -275,8 +275,49 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Assert the tiers partition the suite
+        # Cheap (collect-only, about a second) and it catches the one regression the
+        # tier split can suffer silently: a test that belongs to no tier, or to two.
+        #
+        # tests/conftest.py already raises a UsageError for a file outside
+        # tests/{unit,contract,integration,evaluation}/, so this is not the stray check -
+        # it is the arithmetic. If the marker-filtered total ever differs from the
+        # unfiltered total, some test is invisible to every marker-selected run that
+        # might be added later, and the "passed" count will not say so.
+        run: |
+          # Collection runs to a FILE and its exit code is read from $?, never inferred
+          # from a pipeline. `x=$(pytest ... | tail -1)` returns tail's status, not
+          # pytest's, so a collection error would leave both counts empty, compare equal,
+          # and pass this step green having proved nothing.
+          pytest --co -q > /tmp/all.txt; all_rc=$?
+          pytest -m "unit or contract or integration or evaluation" --co -q             > /tmp/tiered.txt; tiered_rc=$?
+          if [ $all_rc -ne 0 ] || [ $tiered_rc -ne 0 ]; then
+            echo "::error::collection itself failed (exit $all_rc / $tiered_rc)"
+            tail -20 /tmp/all.txt; tail -20 /tmp/tiered.txt
+            exit 1
+          fi
+
+          ALL=$(tail -1 /tmp/all.txt | grep -oE '^[0-9]+')
+          TIERED=$(tail -1 /tmp/tiered.txt | grep -oE '^[0-9]+')
+          echo "unfiltered=$ALL  tiered=$TIERED"
+
+          # An empty count means the summary line was not what this expects, which is a
+          # broken check rather than a passing one.
+          case "$ALL$TIERED" in ''|*[!0-9]*) echo "::error::could not read the collected           counts; this step needs fixing rather than ignoring"; exit 1 ;; esac
+
+          if [ "$ALL" != "$TIERED" ]; then
+            echo "::error::$((ALL - TIERED)) test(s) belong to no tier; a marker-filtered           run would never execute them"
+            exit 1
+          fi
+
       - name: Run tests with coverage
-        # Measured 91% with the postgres service container attached (257 tests, no
+        # ONE full run, deliberately - not a job per tier. This repository is private,
+        # so Actions minutes come out of the account allowance rather than being free
+        # the way they are on a public repo. Running the tiers as separate jobs would
+        # multiply the bill to produce the same answer this single run already gives,
+        # and coverage has to be measured over the whole suite anyway.
+        #
+        # Measured 91% with the postgres service container attached (399 collected, no
         # skips). The floor sits just under it so coverage can only ratchet up.
         #
         # It also catches a failure mode a bare `pytest` hides: without a reachable

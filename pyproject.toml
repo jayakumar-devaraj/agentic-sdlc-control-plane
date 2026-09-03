@@ -27,6 +27,22 @@ pythonpath = ["."]
 # test-runner naming convention would be the tail wagging the dog.
 testpaths = ["tests"]
 
+# Registered so --strict-markers can reject a typo. The markers themselves are never
+# written in a test file - tests/conftest.py derives each one from the directory the
+# test lives in, because a marker a human has to remember is a marker a human forgets,
+# and a forgotten tier marker is a test a marker-filtered CI run silently skips.
+markers = [
+    "unit: no I/O; runs with nothing started",
+    "contract: shape a consumer depends on; no I/O",
+    "integration: needs a real dependency (Postgres)",
+    "evaluation: the seam, exercised from the real calling position",
+]
+
+# --strict-markers catches a MISSPELLED marker. It does not catch a MISSING one - that
+# is what conftest.py's pytest_collection_modifyitems raises a UsageError for. Both are
+# needed and neither substitutes for the other.
+addopts = "--strict-markers"
+
 [tool.coverage.run]
 # Was .coveragerc. CI passes --cov=agentic_control_plane explicitly and does not depend
 # on this; it is what makes a bare `pytest --cov` locally measure the same thing.

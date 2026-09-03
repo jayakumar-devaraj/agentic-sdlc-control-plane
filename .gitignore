@@ -20,6 +20,16 @@ secrets/*.txt
 # so the rule above would not have caught it.
 secrets/claude-session/
 
+# Compose merges `.env` and `docker-compose.override.yml` automatically from beside
+# docker-compose.yml, so neither has to be named on the command line to take effect.
+# Committing either would apply one machine's local settings to everybody, silently.
+#
+# `.env` is the one that matters here rather than a tidiness rule: it is where
+# OTEL_EXPORTER_OTLP_HEADERS is supplied to docker-compose.specialist.yml, and that
+# variable carries a credential. See .env.example for what belongs in it.
+.env
+docker-compose.override.yml
+
 # Cross-repo planning docs live outside this repo's tree, so they can't normally
 # end up here — this is a defensive backstop in case one is ever copied in by
 # mistake. Never commit these.

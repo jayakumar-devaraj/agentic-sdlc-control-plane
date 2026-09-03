@@ -82,6 +82,14 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
+      - name: Assert requirements.lock has not drifted
+        # Pure stdlib, so it runs before anything is installed and fails in seconds when
+        # someone edits a pin without regenerating the lock. Deliberately not a
+        # recompile-and-diff: `uv pip compile` resolves transitive dependencies to
+        # whatever is newest that morning, so a byte diff would fail for reasons having
+        # nothing to do with the change under test. See the script's own docstring.
+        run: python scripts/check_lock_is_current.py
+
       - name: Configure a git identity for the workspace tests
         # tools.git_commit_all sets a per-repo identity, but git also needs a
         # global default present on a bare runner before `git commit` will run.

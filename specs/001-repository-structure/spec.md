@@ -37,8 +37,8 @@ engagement. Bugs found were written down and left.
 
 | # | Criterion | Verified by |
 |---|---|---|
-| 1 | Suite unchanged after every move | 399 collected, 377 passed / 22 skipped, 91% — identical before and after; `echo $?` = 0 |
-| 2 | The four tiers partition the suite exactly | 262 + 62 + 15 + 60 = 399 |
+| 1 | Suite unchanged after every move | identical before and after each move: 399 collected, 377 passed / 22 skipped, 91%, `echo $?` = 0. Final tree adds the structure test: 443 collected, 421 passed / 22 skipped, 91% |
+| 2 | The four tiers partition the suite exactly | 262 + 106 + 15 + 60 = 443 |
 | 3 | A test outside a tier is a hard error, not a silent skip | planted stray file → `pytest -m unit` exit 4 naming it; removed → exit 0 |
 | 4 | `.env` cannot be committed | `git check-ignore -v .env` resolves to the new rule |
 | 5 | Lock drift fails the build | pin edited → exit 1; pin added → exit 1; clean → exit 0 |

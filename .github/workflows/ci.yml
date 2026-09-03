@@ -325,7 +325,7 @@ jobs:
         # multiply the bill to produce the same answer this single run already gives,
         # and coverage has to be measured over the whole suite anyway.
         #
-        # Measured 91% with the postgres service container attached (399 collected, no
+        # Measured 91% with the postgres service container attached (443 collected, no
         # skips). The floor sits just under it so coverage can only ratchet up.
         #
         # It also catches a failure mode a bare `pytest` hides: without a reachable

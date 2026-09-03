@@ -15,7 +15,7 @@ pip install -r requirements.txt
 pytest
 ```
 
-399 tests, 22 of which skip without a reachable Postgres. `README.md` → *Testing* has the
+443 tests, 22 of which skip without a reachable Postgres. `README.md` → *Testing* has the
 environment for running those, and the tier table for everything else.
 
 ## The four rules that will fail your pull request

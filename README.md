@@ -399,7 +399,7 @@ That is the same code path a customised image would take; only the location of t
 pytest
 ```
 
-**399 tests, 91% statement coverage.** CI enforces a floor of 90% (`--cov-fail-under=90`),
+**443 tests, 91% statement coverage.** CI enforces a floor of 90% (`--cov-fail-under=90`),
 so coverage can only ratchet upward - and because skipping the durability tests drops it to
 88%, a CI run whose Postgres service container never came up fails there rather than passing
 quietly.
@@ -409,7 +409,7 @@ Tests live in four tiers, and the tier is the directory:
 | Tier | Tests | Needs | Holds |
 |---|---|---|---|
 | `tests/unit/` | 262 | nothing running | the package's logic in isolation |
-| `tests/contract/` | 62 | nothing running | shapes a consumer depends on - the outcome-event envelope, the routing table, and this repository's own layout |
+| `tests/contract/` | 106 | nothing running | shapes a consumer depends on - the outcome-event envelope, the routing table, and this repository's own layout |
 | `tests/integration/` | 15 | a real Postgres | the durable inbox and run-target stores |
 | `tests/evaluation/` | 60 | a real Postgres | the seam, driven from the real calling position: the compiled graph, the specialist invocation, gate interrupt and resume |
 
@@ -439,7 +439,7 @@ rather than fails:
 POSTGRES_HOST=localhost POSTGRES_PORT=5433 POSTGRES_USER=control_plane POSTGRES_DB=control_plane   POSTGRES_PASSWORD_FILE=secrets/postgres_password.txt   pytest --cov=agentic_control_plane --cov-report=term-missing
 ```
 
-`399 passed` with no skips is the whole suite. A run reporting skips has not exercised
+`443 passed` with no skips is the whole suite. A run reporting skips has not exercised
 durability.
 
 **Five of those 22 sit in `tests/unit/`, which is a known and bounded exception**, not an

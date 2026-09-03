@@ -399,10 +399,11 @@ That is the same code path a customised image would take; only the location of t
 pytest
 ```
 
-**443 tests, 91% statement coverage.** CI enforces a floor of 90% (`--cov-fail-under=90`),
-so coverage can only ratchet upward - and because skipping the durability tests drops it to
-88%, a CI run whose Postgres service container never came up fails there rather than passing
-quietly.
+**443 tests. 94% statement coverage in CI**, where a Postgres service container is attached
+and nothing skips; 91% locally without one. CI enforces a floor of 93%
+(`--cov-fail-under=93`), so coverage can only ratchet upward - and because skipping the
+durability tests drops it to 91%, a CI run whose Postgres service container never came up
+fails there rather than passing quietly.
 
 Tests live in four tiers, and the tier is the directory:
 

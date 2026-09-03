@@ -325,14 +325,27 @@ jobs:
         # multiply the bill to produce the same answer this single run already gives,
         # and coverage has to be measured over the whole suite anyway.
         #
-        # Measured 91% with the postgres service container attached (443 collected, no
-        # skips). The floor sits just under it so coverage can only ratchet up.
+        # Measured **94.19%** with the postgres service container attached (443 collected,
+        # no skips - 2255 statements, 131 missed). The floor sits just under it so coverage
+        # can only ratchet up.
         #
-        # It also catches a failure mode a bare `pytest` hides: without a reachable
-        # postgres the durability tests skip and coverage falls to 88%, so a run
-        # where the service container never came up fails here instead of passing
-        # quietly with the property those tests exist to prove left unverified.
-        run: pytest --cov=agentic_control_plane --cov-report=term-missing --cov-fail-under=90
+        # **THE FLOOR IS 93 BECAUSE 90 HAD STOPPED WORKING.** Its second job is to catch a
+        # failure mode a bare `pytest` hides: without a reachable postgres the durability
+        # tests skip, and a run where the service container never came up must FAIL here
+        # rather than pass quietly with the property those tests exist to prove left
+        # unverified.
+        #
+        # That guarantee had quietly lapsed. The 90 was set when the suite was 257 tests and
+        # skipping dropped it to 88%. The suite has since grown to 443 and coverage grew with
+        # it: skipping now leaves **91.13%** (200 missed), which is ABOVE 90 - so a
+        # postgres-less run would have scored 91% and gone green. Both numbers had drifted
+        # three points from the comment describing them.
+        #
+        # 93 restores the intent against measured values rather than remembered ones:
+        #   postgres attached -> 94.19%  passes
+        #   postgres missing  -> 91.13%  fails
+        # Re-measure both before moving this number again.
+        run: pytest --cov=agentic_control_plane --cov-report=term-missing --cov-fail-under=93
 
       - name: Assert every mermaid diagram parses
         # "The diagrams render on GitHub" has broken three times, and every time the

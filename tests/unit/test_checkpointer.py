@@ -1,18 +1,12 @@
-"""Tests for checkpointer.py: the serde allowlist, connection-string construction,
+"""Tests for checkpointer.py: the serde allowlist and connection-string construction.
 
-and the durability property the whole gate design rests on - a run paused at a gate
-must be resumable from a completely fresh checkpointer connection.
-
-The Postgres reachability probe uses psycopg (already a dependency of
-langgraph-checkpoint-postgres) rather than SQLAlchemy, which belongs to the tenant
-application's stack and has no place in this repo's dependency tree.
+Everything here runs with nothing started. The durability property this module used to
+also carry - a run paused at a gate resuming from a completely fresh connection - needs
+a real database, so it lives in tests/evaluation/test_checkpointer_durability.py.
 """
 
 from __future__ import annotations
 
-import os
-
-import psycopg
 import pytest
 from langgraph.graph import END, START, StateGraph
 
@@ -21,19 +15,8 @@ from agentic_control_plane.checkpointer import (
     _postgres_conn_string,
     _read_secret,
     build_memory_checkpointer,
-    build_postgres_checkpointer,
 )
 from agentic_control_plane.state import GraphState, RunMetrics
-
-
-def _postgres_reachable() -> bool:
-    if not os.environ.get("POSTGRES_USER"):
-        return False
-    try:
-        with psycopg.connect(_postgres_conn_string(), connect_timeout=3):
-            return True
-    except psycopg.OperationalError:
-        return False
 
 
 def test_serde_allowlist_discovers_every_state_submodel():
@@ -126,31 +109,3 @@ def test_conn_string_defaults_carry_no_monolith_leftovers(monkeypatch: pytest.Mo
 
     assert "orchestrator" not in conn
     assert conn.endswith("/control_plane")
-
-
-@pytest.mark.skipif(
-    not _postgres_reachable(), reason="requires PostgreSQL reachable via POSTGRES_* env vars"
-)
-def test_postgres_checkpointer_resumes_a_thread_from_a_fresh_connection():
-    """The whole reason PostgresSaver was chosen over MemorySaver: a pending gate
-
-    must survive something equivalent to a container restart. Simulates that by
-    entering a *second*, independent build_postgres_checkpointer() context and
-    confirming it can read back a thread a prior context wrote.
-    """
-    graph = StateGraph(GraphState)
-    graph.add_node("noop", lambda state: {"requirement_clarified": "seen"})
-    graph.add_edge(START, "noop")
-    graph.add_edge("noop", END)
-
-    config = {"configurable": {"thread_id": "postgres-durability-test"}}
-
-    with build_postgres_checkpointer() as checkpointer:
-        compiled = graph.compile(checkpointer=checkpointer)
-        compiled.invoke(GraphState(scenario_type="brownfield", requirement_raw="x"), config=config)
-
-    # fresh checkpointer instance/connection - simulates resuming after a restart
-    with build_postgres_checkpointer() as checkpointer2:
-        compiled2 = graph.compile(checkpointer=checkpointer2)
-        state = compiled2.get_state(config)
-        assert state.values["requirement_clarified"] == "seen"

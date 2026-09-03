@@ -48,6 +48,7 @@ reasoning where nobody looks for it. An ADR is a stable address for a decision.
 | [0025](adr/0025-the-probe-asks-the-daemon-and-the-graph-asks-the-probe.md) | The probe asks the daemon, and the specialist graph finally asks the probe |
 | [0026](adr/0026-a-runs-delivery-target-outlives-its-process.md) | A run's delivery target outlives its process |
 | [0027](adr/0027-the-specialist-subprocess-is-traced-before-this-service-is.md) | The specialist subprocess is traced before this service is |
+| [0028](adr/0028-the-repository-layout-is-enforced-by-a-test.md) | The repository layout is enforced by a test |
 
 New ADRs are numbered sequentially and never edited once merged. A decision that is later reversed
 gets a new ADR that supersedes the old one, so the reasoning at the time stays legible.

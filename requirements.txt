@@ -5,7 +5,7 @@
 # same group as the four bumps below (PR #28). The set does not resolve:
 #
 #   Because only agentic-events==0.1.0 is available and agentic-events==0.1.0
-#   depends on pydantic==2.10.4 ... and because you require pydantic==2.13.5 ...
+#   depends on pydantic==2.13.5 ... and because you require pydantic==2.13.5 ...
 #
 # So a pydantic bump is not a decision this repository can take. It is a request to
 # agentic-sdlc-eventbus to re-release agentic-events with a range instead of an exact pin.
@@ -33,7 +33,7 @@
 langgraph==1.2.11
 langgraph-checkpoint-postgres==3.1.2
 psycopg[binary]==3.3.5
-pydantic==2.10.4
+pydantic==2.13.5
 # Read by specialists.py for the routing table (ADR-0016). Already resolvable as a
 # transitive dependency of langchain-core, which is not the same as being declared:
 # importing something requirements.txt does not name is a bug even while it works.

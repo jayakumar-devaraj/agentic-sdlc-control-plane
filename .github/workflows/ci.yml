@@ -71,9 +71,9 @@ jobs:
       POSTGRES_USER: control_plane
       POSTGRES_PASSWORD: control_plane
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           # Every run installed this repository's dependencies cold. They are pinned in
@@ -415,7 +415,7 @@ jobs:
     timeout-minutes: 20
     needs: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Write local secret files for compose
         env:
@@ -491,7 +491,7 @@ jobs:
     timeout-minutes: 25
     needs: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Assert the specialist deployment override says what ADR-0022 says it says
         # Runs before the builds because it needs nothing and it is the cheap half of the

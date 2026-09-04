@@ -40,9 +40,16 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.3.0`, cut 2026-09-04. Verified from a clean virtualenv before
+  # than a placeholder: `v0.3.1`, cut 2026-09-04. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
+  #
+  # **v0.3.1 rather than v0.3.0, because v0.3.0's fix did not fire.** The rule shipped and was
+  # inert: it looked for the control break on the step, and the specialist attaches those *after*
+  # the design is validated, so at the moment the check runs no step carries one. The run meant to
+  # prove the fix was refused for the exact value the rule exists to excuse and produced no design
+  # at all -- a `safe_stop` before the human gate, which is the right failure and still a wasted
+  # phase. A deployment pinning v0.3.0 cannot complete a `design` phase for this program.
   #
   # **v0.3.0 rather than v0.2.0, and the reason is the run v0.2.0 produced.** v0.2.0 closed the
   # defect where a generated processor computed a value and discarded it. The first live run on
@@ -90,7 +97,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.3.0"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.3.1"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

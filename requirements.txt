@@ -1,6 +1,16 @@
 # pydantic is pinned by agentic-events==0.1.0 (exact ==2.10.4); it is not a free
 # choice here. Bumping it requires re-releasing the shared contract package first.
 #
+# *** THAT IS MEASURED, NOT REMEMBERED. *** Dependabot proposed pydantic==2.13.5 in the
+# same group as the four bumps below (PR #28). The set does not resolve:
+#
+#   Because only agentic-events==0.1.0 is available and agentic-events==0.1.0
+#   depends on pydantic==2.10.4 ... and because you require pydantic==2.13.5 ...
+#
+# So a pydantic bump is not a decision this repository can take. It is a request to
+# agentic-sdlc-eventbus to re-release agentic-events with a range instead of an exact pin.
+# Until then, expect Dependabot to keep proposing it and expect that PR to stay red.
+#
 # *** agentic-events INSTALLS WHETHER agentic-sdlc-eventbus IS PUBLIC OR PRIVATE. ***
 #
 # Public  -> anonymous HTTPS, no credential anywhere.
@@ -20,9 +30,9 @@
 # correctly, so it was never the cause of anything. It is written out now for a narrower
 # reason: a fine-grained PAT is scoped to a repository, and asking one to authenticate
 # through a rename redirect adds a failure mode nobody needs while diagnosing access.
-langgraph==1.2.9
-langgraph-checkpoint-postgres==3.0.5
-psycopg[binary]==3.2.3
+langgraph==1.2.11
+langgraph-checkpoint-postgres==3.1.2
+psycopg[binary]==3.3.5
 pydantic==2.10.4
 # Read by specialists.py for the routing table (ADR-0016). Already resolvable as a
 # transitive dependency of langchain-core, which is not the same as being declared:
@@ -30,5 +40,5 @@ pydantic==2.10.4
 PyYAML==6.0.3
 kafka-python-ng==2.2.3
 agentic-events @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-eventbus.git@v0.1.0
-pytest==8.3.4
+pytest==9.1.1
 pytest-cov==7.1.0

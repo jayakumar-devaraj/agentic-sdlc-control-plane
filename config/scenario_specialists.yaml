@@ -40,9 +40,20 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.2.0`, cut 2026-09-03. Verified from a clean virtualenv before
+  # than a placeholder: `v0.3.0`, cut 2026-09-04. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
+  #
+  # **v0.3.0 rather than v0.2.0, and the reason is the run v0.2.0 produced.** v0.2.0 closed the
+  # defect where a generated processor computed a value and discarded it. The first live run on
+  # it then produced a second defect one level up: the processor returned the value, and set a
+  # per-account running total to the current row's amount. An account with four category rows
+  # would be posted the last row's interest instead of the sum. That specialist's ADR-0063
+  # records why no component was at fault again - v0.2.0's rule *required* it, because the
+  # accumulated value escapes the paragraph that computes it and the rule therefore demanded the
+  # producing step return it, which a stateless processor can only do by inventing a total.
+  # v0.3.0 excuses it there and refuses it there. A deployment pinning v0.2.0 still generates the
+  # wrong total, and this service cannot see the difference: it compiles and the phase succeeds.
   #
   # **v0.2.0 rather than v0.1.2 closes a defect that survived a human approving it.** The
   # first end-to-end run against a tenant repository generated a processor that computed a
@@ -79,7 +90,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.2.0"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.3.0"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

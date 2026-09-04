@@ -396,78 +396,94 @@ That is the same code path a customised image would take; only the location of t
 ## Testing
 
 ```bash
-pytest --cov=agentic_control_plane --cov-report=term-missing
+pytest
 ```
 
-257 tests, 91% statement coverage. CI enforces a floor of 90% (`--cov-fail-under=90`), so coverage
-can only ratchet upward — and because skipping the durability tests drops it to 88%, a CI run whose
-Postgres service container never came up fails there rather than passing quietly.
+**443 tests. 94% statement coverage in CI**, where a Postgres service container is attached
+and nothing skips; 91% locally without one. CI enforces a floor of 93%
+(`--cov-fail-under=93`), so coverage can only ratchet upward - and because skipping the
+durability tests drops it to 91%, a CI run whose Postgres service container never came up
+fails there rather than passing quietly.
 
-The durability tests need a reachable Postgres and skip without one; run them against the compose
-Postgres. Pass the same secret file Compose gives the database — the password default in
-`_postgres_conn_string` is `control_plane`, which is deliberately not the password you were told to
-choose in Quickstart, so omitting it authenticates as the wrong user and every one of these tests
-skips rather than fails:
+Tests live in four tiers, and the tier is the directory:
+
+| Tier | Tests | Needs | Holds |
+|---|---|---|---|
+| `tests/unit/` | 262 | nothing running | the package's logic in isolation |
+| `tests/contract/` | 106 | nothing running | shapes a consumer depends on - the outcome-event envelope, the routing table, and this repository's own layout |
+| `tests/integration/` | 15 | a real Postgres | the durable inbox and run-target stores |
+| `tests/evaluation/` | 60 | a real Postgres | the seam, driven from the real calling position: the compiled graph, the specialist invocation, gate interrupt and resume |
+
+Select a tier with its marker:
 
 ```bash
-POSTGRES_HOST=localhost POSTGRES_PORT=5433 POSTGRES_USER=control_plane POSTGRES_DB=control_plane \
-  POSTGRES_PASSWORD_FILE=secrets/postgres_password.txt \
-  pytest --cov=agentic_control_plane --cov-report=term-missing
+pytest -m unit          # fast, nothing to start
+pytest -m "integration or evaluation"
 ```
 
-A run that reports skips here has not exercised durability. `257 passed` with no skips is the
-whole suite; anything less means the credential did not reach Postgres.
+**Nothing writes those markers by hand.** `tests/conftest.py` derives each one from the
+directory the test is in, and raises a collection error for any test file outside the four
+tiers. A marker a contributor has to remember is a marker a contributor forgets, and a test
+with no tier marker is collected, counted in "passed", and never actually run by a
+marker-filtered command. `--strict-markers` does not catch that - it catches a *misspelled*
+marker, not a missing one.
 
-Coverage gaps are concentrated in code that needs live infrastructure to exercise meaningfully:
-real `KafkaProducer`/`KafkaConsumer` construction (`events.py`, `main.py`) and the live `claude`
-CLI paths (`coder.py`). Those are covered by functional verification instead.
+### Running the tests that need Postgres
+
+22 tests skip without a reachable database. Run them against the compose Postgres, passing
+the same secret file Compose gives it - the password default in `_postgres_conn_string` is
+`control_plane`, which is deliberately not the password you were told to choose in
+Quickstart, so omitting it authenticates as the wrong user and every one of these skips
+rather than fails:
+
+```bash
+POSTGRES_HOST=localhost POSTGRES_PORT=5433 POSTGRES_USER=control_plane POSTGRES_DB=control_plane   POSTGRES_PASSWORD_FILE=secrets/postgres_password.txt   pytest --cov=agentic_control_plane --cov-report=term-missing
+```
+
+`443 passed` with no skips is the whole suite. A run reporting skips has not exercised
+durability.
+
+**Five of those 22 sit in `tests/unit/`, which is a known and bounded exception**, not an
+oversight: four in `test_consumer.py` and one in `test_runner.py`. They are Postgres-gated
+tests inside modules that are otherwise pure unit tests, and separating them means splitting
+files rather than moving them - which is a change to what the tests do, not to where they
+live. `tests/contract/test_repository_structure.py` pins the count at five so the exception
+cannot quietly grow.
+
+Coverage gaps are concentrated in code that needs live infrastructure to exercise
+meaningfully: real `KafkaProducer`/`KafkaConsumer` construction (`events.py`, `main.py`) and
+the live `claude` CLI paths (`coder.py`). Those are covered by functional verification
+instead.
 
 ### Functional verification
 
-Run end-to-end against a real broker and a real Postgres, from inside the container:
+Unit tests measure whether the code does what it says in isolation. They do not measure
+whether a gate survives a container restart, whether a rebalanced consumer resumes a parked
+run, or whether a clone authenticates - and this service's failures live there.
 
-| Check | Result |
-|---|---|
-| Pattern subscription discovers a topic created after startup | PASS — run began ~31s after publish |
-| Container consumes a drift event through the event bus's cross-container listener | PASS |
-| Container publishes its outcome event through the same listener | PASS — consumed back off the topic, `producer.instance_id` matching the container hostname |
-| Private-repo HTTPS clone using the mounted PAT | PASS — cloned at commit `335472aa`, against a repository that was private when this was run |
-| A PAT lacking access fails cleanly | PASS — 403 became a `clone_failed` outcome, no crash |
-| Run parks at a real `interrupt()` without blocking the poll loop | PASS |
-| Kafka gate decision resumes the parked run | PASS |
-| `test_executor` runs a real pytest subprocess against the clone | PASS — 1075ms |
-| Full completion in-container | PASS — commit `9224abcd`, `completed`, workspace removed |
-| Unmounted fixtures safe-stop with a stated reason | PASS |
-| Workspace deleted on terminal state | PASS |
-| Parked run resumed by a *different* process after the original was killed | PASS |
-| Startup reconciliation removes orphaned workspaces | PASS |
-| The documented script-free sequence above, run in replay mode | PASS — 2026-08-01, cloned at `820750d2`, both gates answered, real pytest passed in 1336 ms, 0 guardrail findings, commit `9637e763`, `completed` |
-| The same sequence a second time, in the same process | PASS — `completed`, `run-outcome` published with the clone-time `commit_sha` |
-| **`ORCHESTRATOR_MODE=live`: real generation via the `claude` CLI** | PASS — 2026-08-01, coder generated 2 file(s) in 111 875 ms, `test_executor` passed a real pytest against them in 1 609 ms, 0 guardrail findings, commit `9251028d`, `completed` |
-| The same sequence run from a **Linux** shell | PASS — driven from a Linux container against the same daemon, twice, both to `completed` (commits `26c3575a`, `65d809f5`) |
-| **Every run is audited, not only the first** | PASS after ADR 0011 — two consecutive runs on a fresh audit volume recorded **17 records each** on `control-plane.audit.v1`, one continuous 34-record chain. Before the fix, the second run recorded **zero** despite completing |
-| **`PUBLISH_MODE=branch`: an approved change reaches the tenant repository** | PASS — 2026-08-01, in-container run pushed `agentic-patch/clean-1785628701` at `b0d47320`; the outcome event carried `commit_sha_after`, `published: true` and the branch. `main` untouched |
-| The delivered branch carries the change and nothing else | PASS — after excluding build artefacts: 3 files (module, its test, the generated doc). The first delivery before that fix carried 4 `.pyc` files |
-| Hash-chained audit trail | PASS — `verify_chain` clean over all 34 records, and continuous across a container restart |
-| An empty `event_id` is rejected rather than acted on | PASS — envelope validation routed it to the DLQ; the parked run was untouched and resumed normally once a valid decision arrived |
-
-The two rows about running the sequence twice are the ones worth understanding together, because
-the second run is what exposed [ADR 0011](docs/adr/0011-the-audit-cursor-belongs-to-the-run-not-the-process.md).
-Both runs completed and published outcomes, and `verify_chain` reported the trail intact — while
-the second run was missing from it entirely. A chain proves record N follows N−1; it is evidence
-about the records that are present and none at all about the ones that should be. The check that
-actually catches it is counting records per `correlation_id` on the audit topic against runs
-served, which is what the "every run is audited" row reports.
-
-Memory, sampled across a full run including the pytest subprocess: **69.6 MiB against the 1 GiB
-limit**, flat throughout; the Postgres container sits at 36 MiB against 512 MiB.
-
-Five defects were found by these runs and by nothing else, with a full unit suite passing
-throughout all of them. They are written up in `docs/adr/0002` through `0006`.
+That evidence is the evaluation tier's own artefact:
+**[`tests/evaluation/REPORT.md`](tests/evaluation/REPORT.md)** - end-to-end runs against a
+real broker and a real Postgres, including the five defects a fully green unit suite passed
+straight through.
 
 ## Deployment / CI
 
-`.github/workflows/ci.yml` runs on every push and pull request to `main`.
+`.github/workflows/ci.yml` runs on **pull requests to `main`, and on manual dispatch - not
+on push**. GitHub checks a pull request against the merge result, so the tree that lands on
+`main` is the tree the PR already tested; re-running on the merge commit paid twice for one
+answer. Use `workflow_dispatch` to run it against `main` by hand when that is actually wanted.
+
+Before installing anything it asserts `requirements.lock` still agrees with
+`requirements.txt`, which is stdlib-only and fails in seconds. After installing it asserts
+the four test tiers partition the suite - that the marker-filtered collection count equals
+the unfiltered one - so a test belonging to no tier fails the build instead of being
+invisible to every marker-selected run.
+
+`.github/workflows/security.yml` is separate and runs **weekly on a schedule**, not per pull
+request: it runs `pip-audit` over the installed dependency tree, because a CVE is published
+on the world's timetable rather than on this repository's. It reports no status on a pull
+request, so its check must never be made a required one - a required context that nothing
+reports blocks every PR forever. The file records what it deliberately does not do, and why.
 
 The test job runs the suite against a real `postgres:16-alpine` service container rather than
 skipping the durability tests — those tests are the reason a durable checkpointer was chosen over

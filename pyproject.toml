@@ -1,0 +1,49 @@
+# TOOL CONFIGURATION ONLY. There is deliberately no `[project]` and no `[build-system]`.
+#
+# Nothing installs this repository. It is an application, not a distributable: both
+# Dockerfiles do `COPY requirements.txt` -> `pip install -r` -> `COPY . .` and then run
+# `python -m agentic_control_plane.main` with `WORKDIR /app`, so the package resolves
+# because the working directory is on sys.path. No sibling repository imports it either.
+#
+# Adding `[project]` here would invite a `src/` layout, which would break three things
+# at once: both container builds, and `specialists.py`'s resolution of the routing table
+# at `Path(__file__).resolve().parents[1] / "config"` (ADR-0016 - `config/` sits beside
+# the package on purpose, so tenant vocabulary stays data the package reads rather than
+# something the package contains).
+#
+# What this file is for is the opposite of packaging: ruff, mypy, pytest and coverage all
+# read their configuration from `pyproject.toml` whether or not the directory is a
+# package, so a repository with no distribution can still have one config file instead of
+# several. `pytest.ini` and `.coveragerc` were those several.
+
+[tool.pytest.ini_options]
+# Was `pythonpath = .` in pytest.ini. Load-bearing: without it nothing under
+# agentic_control_plane/ imports, because there is no installed package to fall back on.
+pythonpath = ["."]
+
+# Scoped deliberately. One of the graph's own nodes is named test_executor.py, so a
+# bare `pytest` would collect it as a test module and try to call the node function
+# as a test. Restricting collection to tests/ is the fix; renaming a node after a
+# test-runner naming convention would be the tail wagging the dog.
+testpaths = ["tests"]
+
+# Registered so --strict-markers can reject a typo. The markers themselves are never
+# written in a test file - tests/conftest.py derives each one from the directory the
+# test lives in, because a marker a human has to remember is a marker a human forgets,
+# and a forgotten tier marker is a test a marker-filtered CI run silently skips.
+markers = [
+    "unit: no I/O; runs with nothing started",
+    "contract: shape a consumer depends on; no I/O",
+    "integration: needs a real dependency (Postgres)",
+    "evaluation: the seam, exercised from the real calling position",
+]
+
+# --strict-markers catches a MISSPELLED marker. It does not catch a MISSING one - that
+# is what conftest.py's pytest_collection_modifyitems raises a UsageError for. Both are
+# needed and neither substitutes for the other.
+addopts = "--strict-markers"
+
+[tool.coverage.run]
+# Was .coveragerc. CI passes --cov=agentic_control_plane explicitly and does not depend
+# on this; it is what makes a bare `pytest --cov` locally measure the same thing.
+source = ["agentic_control_plane"]

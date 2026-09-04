@@ -174,7 +174,7 @@ def _dsn() -> str:
     os.environ.setdefault("POSTGRES_HOST", "localhost")
     os.environ.setdefault("POSTGRES_PORT", "5433")
     os.environ.setdefault(
-        "POSTGRES_PASSWORD_FILE", str(Path(__file__).resolve().parents[1] / "secrets" / "postgres_password.txt")
+        "POSTGRES_PASSWORD_FILE", str(Path(__file__).resolve().parents[2] / "secrets" / "postgres_password.txt")
     )
     return _postgres_conn_string()
 

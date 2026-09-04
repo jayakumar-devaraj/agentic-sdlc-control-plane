@@ -40,9 +40,20 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.1.2`, cut 2026-08-29. Verified from a clean virtualenv before
+  # than a placeholder: `v0.2.0`, cut 2026-09-03. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
+  #
+  # **v0.2.0 rather than v0.1.2 closes a defect that survived a human approving it.** The
+  # first end-to-end run against a tenant repository generated a processor that computed a
+  # monthly interest and discarded it - legal Java, a clean compile, and a comment claiming
+  # the value had been accumulated. No component was at fault: that repository's design
+  # document had no way to express a type carrying a value no record holds, so its architect
+  # designed the only expressible thing and its renderer emitted exactly what was designed.
+  # Its ADR-0062 gives the design a word for such a value and refuses a step that computes
+  # one it cannot return, at the point the design is produced rather than three layers later.
+  # A deployment pinning v0.1.2 still produces the discarding processor, and this service
+  # cannot see the difference: the artifact compiles and the phase reports success.
   #
   # **v0.1.2 rather than v0.1.1 is what makes a specialist run observable at all.** That
   # repository's ADR-0046 decided to emit OpenTelemetry spans from `call_model` and its two
@@ -68,7 +79,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.1.2"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.2.0"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

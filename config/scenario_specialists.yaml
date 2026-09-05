@@ -40,7 +40,7 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.4.0`, cut 2026-09-05. Verified from a clean virtualenv before
+  # than a placeholder: `v0.4.1`, cut 2026-09-05. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
   #
@@ -66,6 +66,12 @@ specialists:
   # Verified by interrogating the installed artifact for the *mechanism* rather than the version,
   # which is the check v0.3.0 taught: 9 of 9, including that the resolver reads `computed_fields`,
   # that `run_generate` both renders and runs the test, and that the oracle ships in the wheel.
+  #
+  # **v0.4.1 rather than v0.4.0, and the first live run on v0.4.0 is what found it.** v0.4.0's file
+  # bindings asked "does this step read a file" without first asking "is it fed by an aggregation",
+  # so any design attaching a control break -- which is the shape that run's design produced, and
+  # the correct shape -- refused the whole job's wiring. Caught by a pre-flight check against the
+  # real design before the generate phase was spent, not by the run failing.
   #
   # **v0.3.1 rather than v0.3.0, because v0.3.0's fix did not fire.** The rule shipped and was
   # inert: it looked for the control break on the step, and the specialist attaches those *after*
@@ -120,7 +126,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.0"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.1"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

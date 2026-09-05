@@ -40,9 +40,32 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.3.1`, cut 2026-09-04. Verified from a clean virtualenv before
+  # than a placeholder: `v0.4.0`, cut 2026-09-05. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
+  #
+  # **v0.4.0 rather than v0.3.1, because v0.3.1 has no gate at all.** Every tag before this one
+  # shipped a *rule* meant to stop one defect and reported nothing about whether the generated
+  # code was right; three defects reached `card-service` past a gate whose sentence was
+  # "Generated and compiled 4 processor step(s)." v0.4.0 is the first that checks.
+  #
+  # Two mechanisms, and what each is worth stated rather than implied. `generate` renders a JUnit
+  # equivalence test beside each processor and runs it (that specialist's ADR-0065) - it catches a
+  # computed value that is discarded, a wrong rounding mode, and a zero-rate row that emits a
+  # transaction, and it does **not** catch the WS-TOTAL-INT accumulator, which is a cross-row sum a
+  # per-row table cannot express. And `generate` now renders the job wiring (ADR-0066/0067), so the
+  # project it produces builds and runs, and the record-level differential returns a verdict
+  # instead of `not_run` for the first time.
+  #
+  # **Expect `equivalence: mismatched` for CBACT04C, permanently, from a correct run.** Three
+  # account fields diverge because the COBOL's own account-break post sits in a branch its loop
+  # never reaches, and the generated job reproduces that faithfully. The verdict names the record
+  # and the fields. Reading the word alone and concluding the generated code is wrong is the
+  # misreading this paragraph exists to prevent.
+  #
+  # Verified by interrogating the installed artifact for the *mechanism* rather than the version,
+  # which is the check v0.3.0 taught: 9 of 9, including that the resolver reads `computed_fields`,
+  # that `run_generate` both renders and runs the test, and that the oracle ships in the wheel.
   #
   # **v0.3.1 rather than v0.3.0, because v0.3.0's fix did not fire.** The rule shipped and was
   # inert: it looked for the control break on the step, and the specialist attaches those *after*
@@ -97,7 +120,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.3.1"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.0"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

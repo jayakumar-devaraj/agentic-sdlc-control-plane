@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic_control_plane import consumer, main, runner, tools, workspace
+from agentic_control_plane import consumer, main, run_routing, runner, tools, workspace
 from agentic_control_plane.checkpointer import build_memory_checkpointer
 
 
@@ -51,11 +51,65 @@ def test_reconcile_keeps_the_workspace_of_a_run_still_parked(env: Path, monkeypa
     checkpointer = build_memory_checkpointer()
     ws = workspace.workspace_for("parked-run")
     tools.write_code_files(ws, {"svc/x.py": "x = 1\n"})
-    monkeypatch.setattr(runner, "is_resumable", lambda run_id, _cp: run_id == "parked-run")
+    monkeypatch.setattr(
+        runner, "is_resumable", lambda run_id, _cp, _factory=None: run_id == "parked-run"
+    )
 
     main._reconcile_workspaces(checkpointer)
 
     assert workspace.workspace_for("parked-run").exists()
+
+
+def test_reconcile_asks_each_run_s_own_graph_whether_it_can_continue(env: Path, monkeypatch):
+    """The defect that swept a parked specialist run, costing a paid design phase.
+
+    `runner._compiled_for` defaults to the SDLC graph. Asking without a factory rebuilds that
+    topology against a checkpoint a *specialist* run wrote, so `next` comes back empty and a run
+    parked at a gate reads as an orphan. Every other caller already passed the factory; this one
+    did not, and nothing asserted that it should.
+
+    Asserted on the argument rather than on the outcome: a test that only checked the workspace
+    survived would pass again the moment the default graph happened to agree, which is exactly how
+    this went unnoticed.
+    """
+    checkpointer = build_memory_checkpointer()
+    tools.write_code_files(workspace.workspace_for("specialist-run"), {"svc/x.py": "x = 1\n"})
+
+    sentinel = object()
+    monkeypatch.setattr(
+        run_routing, "graph_factory_for_existing_run", lambda run_id, _cp: sentinel
+    )
+    seen: list[object] = []
+
+    def is_resumable(run_id, _cp, factory=None):
+        seen.append(factory)
+        return True
+
+    monkeypatch.setattr(runner, "is_resumable", is_resumable)
+
+    main._reconcile_workspaces(checkpointer)
+
+    assert seen == [sentinel], "reconciliation asked a graph that is not this run's"
+    assert workspace.workspace_for("specialist-run").exists()
+
+
+def test_reconcile_keeps_a_workspace_whose_topology_cannot_be_resolved(env: Path, monkeypatch):
+    """A routing table that moved under a parked run raises, and the sweep must not delete on it.
+
+    `workspace.reconcile` already treats an exception as "leave it in place"; this pins that the
+    new factory lookup is inside that guard rather than outside it.
+    """
+    checkpointer = build_memory_checkpointer()
+    tools.write_code_files(workspace.workspace_for("moved-route"), {"svc/x.py": "x = 1\n"})
+
+    def raises(run_id, _cp):
+        raise run_routing.RoutingChangedError("the routing table changed under this run")
+
+    monkeypatch.setattr(run_routing, "graph_factory_for_existing_run", raises)
+
+    main._reconcile_workspaces(checkpointer)
+
+    assert workspace.workspace_for("moved-route").exists()
 
 
 def test_audit_log_path_is_configurable(monkeypatch: pytest.MonkeyPatch):

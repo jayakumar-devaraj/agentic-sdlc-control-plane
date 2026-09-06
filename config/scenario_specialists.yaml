@@ -40,7 +40,7 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.4.4`, cut 2026-09-06. Verified from a clean virtualenv before
+  # than a placeholder: `v0.4.5`, cut 2026-09-06. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
   #
@@ -81,6 +81,35 @@ specialists:
   # One of these checks was *changed* rather than carried forward: it asserted that a tasklet
   # appears in the skip list with its role in the reason, which is exactly the behaviour ADR-0071
   # reverses. Left alone it would have failed for the right reason and read as a regression.
+  #
+  # **v0.4.5 rather than v0.4.4, and a live run under v0.4.4 is what found it.** Run
+  # `step56-cbact04c-20260906-153713` designed a correctly ordered job on the architect's *first*
+  # attempt with no repair -- so v0.4.4's prompt half is answered -- and `generate` refused the
+  # wiring anyway: two steps consuming one type both wanted an `ItemReader<RatedCategoryBalance>`,
+  # and Spring resolves those by type.
+  #
+  # That refusal was right and was the shallower of two problems. A step took a file reader whenever
+  # its input type happened to be assemblable from declared files, mid-chain or not, so it re-derived
+  # what the step before it had produced and that step's store went unread. In `CBACT04C` the rebuild
+  # has to redo the disclosure-group keyed read and its `'DEFAULT'` fallback on status `'23'` -- the
+  # entire job of the step whose output it was discarding. Two steps sharing an input type was only a
+  # problem because neither should have had a file reader; a passthrough turned a silent duplication
+  # into a loud refusal.
+  #
+  # The chain outranks the file now, through one predicate the three modules that were each deciding
+  # it privately all call (that specialist's ADR-0074). **This had been rendering into every job the
+  # pipeline ever produced**, and 906 of that repository's tests passed with the precedence flipped,
+  # because none of them asserted which reader a mid-chain step gets.
+  #
+  # **What is still unmeasured, stated rather than predicted.** The differential has never returned
+  # a verdict on a live design. v0.4.4's entry below predicted `mismatched` and got `not_run` again,
+  # for a reason nobody had looked for -- so this entry predicts nothing and says only what was
+  # verified: the ordering rule is obeyed, and the wiring defect behind that run is fixed.
+  #
+  # Interrogated functionally, 23 of 23, from a clean virtualenv install of `v0.4.5` -- the twenty
+  # v0.4.4 carried plus three for ADR-0074, including that a mid-chain step reads its predecessor
+  # **while `_has_file_source` still answers True for it**, which is the precedence rather than a
+  # restatement of the fact.
   #
   # **v0.4.4 rather than v0.4.3, and it closes the sentence v0.4.3 ended on.** That entry said
   # `Equivalence: NOT RUN` stands until an architect orders every processor step where its input
@@ -210,7 +239,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.4"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.5"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

@@ -40,7 +40,7 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.4.1`, cut 2026-09-05. Verified from a clean virtualenv before
+  # than a placeholder: `v0.4.2`, cut 2026-09-06. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
   #
@@ -64,8 +64,37 @@ specialists:
   # misreading this paragraph exists to prevent.
   #
   # Verified by interrogating the installed artifact for the *mechanism* rather than the version,
-  # which is the check v0.3.0 taught: 9 of 9, including that the resolver reads `computed_fields`,
-  # that `run_generate` both renders and runs the test, and that the oracle ships in the wheel.
+  # which is the check v0.3.0 taught: 9 of 9 for v0.4.1, including that the resolver reads
+  # `computed_fields`, that `run_generate` both renders and runs the test, and that the oracle
+  # ships in the wheel.
+  #
+  # **v0.4.2's interrogation is functional rather than textual, and that is v0.3.0's lesson taken
+  # one step further.** A grep proves a line shipped, and v0.3.0's line shipped and never fired. So
+  # these nine build a design and call the code: `aggregation_blockers` returns empty for a carried
+  # value, `aggregation_source` resolves the break, `plan_steps` skips a tasklet with the role in
+  # its reason, `_has_file_source` answers False for a composite carrying a computed value, and the
+  # ADR-0070 refusal both fires on a `writer`-typed transform and stays silent on a correct design.
+  # 9 of 9 from a clean virtualenv install of the tag, and again inside the built image.
+  #
+  # **v0.4.2 rather than v0.4.1: the wiring had never met a design a model wrote.** Every number
+  # behind v0.4.0's wiring was measured against a design that specialist's own test fixtures
+  # declare, and a live design refused - then refused again after each fix, four times. An
+  # aggregation could not see a value carried as a computed field; the planner never read a step's
+  # `role`, so a file-open tasklet and a record-read reader were planned as chunk steps and
+  # collided on one bean type; a composite carrying a computed value was called file-readable, and
+  # the reader rendered three constructor arguments for a four-component record; and a plain entity
+  # was wrapped in its own constructor. That specialist's ADR-0068 fixes them and ADR-0069 pins a
+  # real design as a regression fixture, which is the part that keeps the fifth from being found
+  # this way too.
+  #
+  # **What v0.4.2 does not do, and an operator should expect to see it.** The fifth defect is the
+  # *design's*: a live architect typed two per-item transforms as `writer`, and a body is generated
+  # for a processor and nothing else, so the job wires itself to classes that do not exist and the
+  # project does not compile. ADR-0070 refuses that where the design is produced (architect prompt
+  # `v1_4_0`) rather than patching the renderer - so a run on v0.4.2 either produces a correctly
+  # typed design or fails at `design` with a message naming the role to use. **Neither outcome has
+  # been seen from a live model yet.** The refusal is enforced and tested in both directions; that
+  # a model obeys it first time is what the next run answers.
   #
   # **v0.4.1 rather than v0.4.0, and the first live run on v0.4.0 is what found it.** v0.4.0's file
   # bindings asked "does this step read a file" without first asking "is it fed by an aggregation",
@@ -126,7 +155,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.1"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.2"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

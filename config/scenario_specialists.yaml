@@ -40,7 +40,7 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.4.2`, cut 2026-09-06. Verified from a clean virtualenv before
+  # than a placeholder: `v0.4.3`, cut 2026-09-06. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
   #
@@ -70,11 +70,36 @@ specialists:
   #
   # **v0.4.2's interrogation is functional rather than textual, and that is v0.3.0's lesson taken
   # one step further.** A grep proves a line shipped, and v0.3.0's line shipped and never fired. So
-  # these nine build a design and call the code: `aggregation_blockers` returns empty for a carried
-  # value, `aggregation_source` resolves the break, `plan_steps` skips a tasklet with the role in
-  # its reason, `_has_file_source` answers False for a composite carrying a computed value, and the
-  # ADR-0070 refusal both fires on a `writer`-typed transform and stays silent on a correct design.
-  # 9 of 9 from a clean virtualenv install of the tag, and again inside the built image.
+  # these twelve build a design and call the code: `aggregation_blockers` returns empty for a
+  # carried value, `aggregation_source` resolves the break, `plan_steps` plans no tasklet,
+  # `_has_file_source` answers False for a composite carrying a computed value, the ADR-0070 refusal
+  # both fires on a `writer`-typed transform and stays silent on a correct design, and for ADR-0071
+  # only a processor is a chunk step, `STEP_NAMES` omits a non-chunk step, and a role exclusion is
+  # not reported as skipped. 12 of 12 from a clean virtualenv install of the tag, and again inside
+  # the built image.
+  #
+  # One of these checks was *changed* rather than carried forward: it asserted that a tasklet
+  # appears in the skip list with its role in the reason, which is exactly the behaviour ADR-0071
+  # reverses. Left alone it would have failed for the right reason and read as a regression.
+  #
+  # **v0.4.3 rather than v0.4.2, and the first run that got this far is what found it.** v0.4.2
+  # rendered the first live design's wiring and produced a project that compiles and a job that
+  # cannot start: it named nine steps and had beans for five, so it threw at startup on the first
+  # file-open tasklet. v0.4.2 taught the planner that a tasklet and a reader are not steps and left
+  # the job configuration naming every declared step - two halves of one decision, disagreeing.
+  # v0.4.3 has both ask one predicate, adds `writer` to the roles that are not chunk steps, and
+  # stops reporting a role exclusion as missing business logic (that specialist's ADR-0071).
+  #
+  # **A green compile is not a job that runs, and this deployment should not read it as one.** The
+  # pre-flight for that run compiled the rendered project successfully; a Spring bean lookup fails
+  # at runtime, so nothing in a build could have caught it.
+  #
+  # **What v0.4.3 still does not do.** `Equivalence: NOT RUN` remains the expected verdict for
+  # CBACT04C until an architect orders every processor step where its input exists. The step55
+  # design puts a fee step after the one that changes the item's type, so nothing supplies its
+  # input; it is named in the job with no bean, deliberately, because dropping a step whose COBOL a
+  # renderer has not read is the failure that field exists to prevent. That is a design-ordering
+  # finding, not a renderer one.
   #
   # **v0.4.2 rather than v0.4.1: the wiring had never met a design a model wrote.** Every number
   # behind v0.4.0's wiring was measured against a design that specialist's own test fixtures
@@ -155,7 +180,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.2"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.3"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

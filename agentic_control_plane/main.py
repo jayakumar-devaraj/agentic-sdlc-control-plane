@@ -23,7 +23,15 @@ import threading
 import time
 from pathlib import Path
 
-from agentic_control_plane import consumer, events, inbox, run_targets, runner, workspace
+from agentic_control_plane import (
+    consumer,
+    events,
+    inbox,
+    run_routing,
+    run_targets,
+    runner,
+    workspace,
+)
 from agentic_control_plane.checkpointer import _postgres_conn_string, build_postgres_checkpointer
 from agentic_control_plane.logging_config import configure_logging
 from agentic_control_plane.telemetry import TelemetrySink
@@ -60,7 +68,27 @@ def _run_sweep_loop(worker: consumer.Worker, stop_event: threading.Event) -> Non
 
 
 def _reconcile_workspaces(checkpointer) -> None:
-    removed = workspace.reconcile(lambda run_id: runner.is_resumable(run_id, checkpointer))
+    """Sweep orphaned workspaces, asking each run's **own** graph whether it can continue.
+
+    **The factory is the whole fix.** `runner._compiled_for` defaults to the SDLC graph, so asking
+    without one rebuilds that topology and reads a checkpoint a *specialist* run wrote. The node
+    names do not match, `next` comes back empty, and `is_resumable` answers False for a run that is
+    parked at a gate and waiting for a human. Every specialist run was therefore one restart from
+    losing its workspace, and one did: `step54b-cbact04c-20260905-211254` was swept mid-flight,
+    costing a paid design phase, while its three checkpoint rows sat intact in Postgres.
+
+    `graph_factory_for_existing_run` exists for exactly this and every other caller already used it.
+
+    It can raise `RoutingChangedError` when the routing table moved under a parked run.
+    `workspace.reconcile` catches that and keeps the workspace, which is the conservative answer and
+    the one this sweep should give when it cannot tell.
+    """
+
+    def resumable(run_id: str) -> bool:
+        factory = run_routing.graph_factory_for_existing_run(run_id, checkpointer)
+        return runner.is_resumable(run_id, checkpointer, factory)
+
+    removed = workspace.reconcile(resumable)
     if removed:
         logger.warning("Reconciled %d orphaned workspace(s): %s", len(removed), ", ".join(removed))
     else:

@@ -40,7 +40,7 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.4.3`, cut 2026-09-06. Verified from a clean virtualenv before
+  # than a placeholder: `v0.4.4`, cut 2026-09-06. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
   #
@@ -82,6 +82,36 @@ specialists:
   # appears in the skip list with its role in the reason, which is exactly the behaviour ADR-0071
   # reverses. Left alone it would have failed for the right reason and read as a regression.
   #
+  # **v0.4.4 rather than v0.4.3, and it closes the sentence v0.4.3 ended on.** That entry said
+  # `Equivalence: NOT RUN` stands until an architect orders every processor step where its input
+  # exists. It also said nothing supplies the fee step's input, and that was wrong in the one way
+  # that mattered: the step three back supplies it and the step in front consumes it, returning a
+  # different type. A fan-out, not a missing producer -- so a valid order exists one move away.
+  #
+  # The architect prompt is `v1_5_0`, which states that a step is ordered where its input exists and
+  # that among steps consuming one type the step changing it comes last. The contract refuses a
+  # design that breaks it and **names the move**, and refuses only where one move would wire the
+  # job: an unorderable design has a real fan-out the chain cannot express, and spending that
+  # specialist's one repair attempt on an instruction nothing satisfies buys nothing.
+  #
+  # **The design that refusal asks for did not compile, and building it is the only reason anyone
+  # knew.** Staging stores were keyed by the type they carry, so a passthrough step -- one type on
+  # two consecutive edges -- resolved both its ends to one bean and declared it twice. Keyed by the
+  # step that fills them now (that specialist's ADR-0073). Deduplicating the parameter instead would
+  # have compiled and produced a job that never terminates, because the store is one list with a
+  # read cursor and the step would refill it as fast as it drained it.
+  #
+  # **This deployment should expect `equivalence: mismatched` for CBACT04C, not `not_run`.** The
+  # three-field divergence the paragraph above describes is the correct verdict; `not_run` was the
+  # symptom of a job that could not start, and that job starts now.
+  #
+  # Interrogated functionally, 20 of 20, from a clean virtualenv install of `v0.4.4` -- the twelve
+  # v0.4.3 carried plus eight for the two new records, including that the refusal finds and names
+  # the move on a misordered chain, **stays silent on a correctly ordered one**, and stays silent
+  # again when no single move would wire the job. The staging checks assert both ends of a
+  # passthrough land on stores before asserting the stores differ: without that the check passes
+  # while the step takes a file reader and never reaches the collision.
+  #
   # **v0.4.3 rather than v0.4.2, and the first run that got this far is what found it.** v0.4.2
   # rendered the first live design's wiring and produced a project that compiles and a job that
   # cannot start: it named nine steps and had beans for five, so it threw at startup on the first
@@ -94,12 +124,12 @@ specialists:
   # pre-flight for that run compiled the rendered project successfully; a Spring bean lookup fails
   # at runtime, so nothing in a build could have caught it.
   #
-  # **What v0.4.3 still does not do.** `Equivalence: NOT RUN` remains the expected verdict for
-  # CBACT04C until an architect orders every processor step where its input exists. The step55
-  # design puts a fee step after the one that changes the item's type, so nothing supplies its
-  # input; it is named in the job with no bean, deliberately, because dropping a step whose COBOL a
-  # renderer has not read is the failure that field exists to prevent. That is a design-ordering
-  # finding, not a renderer one.
+  # **What v0.4.3 did not do, closed by v0.4.4 above.** `Equivalence: NOT RUN` was the expected
+  # verdict for CBACT04C under this tag, because the step55 design put a fee step after the one
+  # that changes the item's type and the job it wired could not start. The step was named with no
+  # bean, deliberately: dropping a step whose COBOL a renderer has not read is the failure that
+  # field exists to prevent. Left here as the reading that was correct for v0.4.3 -- and as the
+  # record of a diagnosis that was right about the outcome and wrong about the cause.
   #
   # **v0.4.2 rather than v0.4.1: the wiring had never met a design a model wrote.** Every number
   # behind v0.4.0's wiring was measured against a design that specialist's own test fixtures
@@ -180,7 +210,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.3"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.4"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

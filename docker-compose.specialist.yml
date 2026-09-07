@@ -37,7 +37,7 @@ services:
         # the routing table is read at runtime and this is a build input. They must agree: a
         # routing table naming a tag the image did not install is a run that reaches
         # `SpecialistInvocationError` after a human has already approved a design.
-        SPECIALIST_REQUIREMENT: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.5"
+        SPECIALIST_REQUIREMENT: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.6"
     environment:
       # Overrides the base file's `none`. `branch` pushes `agentic-patch/{run_id}` to the
       # routed `output_repository` after the release gate is approved, and never touches its

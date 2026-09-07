@@ -40,7 +40,7 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.4.5`, cut 2026-09-06. Verified from a clean virtualenv before
+  # than a placeholder: `v0.4.6`, cut 2026-09-07. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
   #
@@ -81,6 +81,36 @@ specialists:
   # One of these checks was *changed* rather than carried forward: it asserted that a tasklet
   # appears in the skip list with its role in the reason, which is exactly the behaviour ADR-0071
   # reverses. Left alone it would have failed for the right reason and read as a regression.
+  #
+  # **v0.4.6 rather than v0.4.5, and it is the first tag whose pipeline runs what it generated.**
+  # Every tag before this one produced a job and stopped: `generate` called `compile_project` with
+  # `goal="compile"` and returned, so nothing staged the oracle's inputs and nothing executed the
+  # built job. `compare_project_output` has been able to return a verdict since ADR-0064 and had
+  # never returned one, on any run -- including `step58-cbact04c-20260907-085235`, which rendered
+  # **6 of 6** steps and reported every renderable step wired.
+  #
+  # ADR-0075 closes that. `generate` stages the oracle's inputs, renders a runner named from the
+  # design, and runs it narrowed with `-Dtest=` -- not `goal="verify"`, which is what runs the job
+  # in the hand-written round trip and would make this verdict depend on `BaselineStackTest`, the
+  # `@SpringBootTest @Testcontainers` the baseline template ships. A new `JobRunVerdict` reports it,
+  # separate from the differential's, because `not_run` is the same sentence for a job that abended,
+  # a context that could not start, and a pipeline that never tried.
+  #
+  # **This entry predicts nothing about the differential, and there is a stated reason to expect
+  # less than a match.** Both live `CBACT04C` designs bind **three** of the program's five files:
+  # `XREFFILE` and `DISCGRP` are declared, resolvable, and bound to nothing, and every rendered
+  # processor is constructed with no arguments, so the steps meant to attach the account, the card
+  # cross-reference and the interest rate can read none of them. The renderer supports that join
+  # when a step's `input_type` is the composite; both models wrote the bare entity instead, and
+  # nothing refuses it. A `mismatched` from this release is at least as likely to be about the two
+  # files the job never opened as about the arithmetic -- ADR-0075's Consequences states the shape,
+  # and it wants its own record.
+  #
+  # Interrogated functionally, 27 of 27, from a clean virtualenv install of `v0.4.6` -- the
+  # twenty-three v0.4.5 carried plus four for ADR-0075, including that staging lands on the two
+  # paths the differential actually opens, and that a bound input with no source is **refused**
+  # rather than silently treated as an output. That last one is not a restatement: written the
+  # obvious way the branch was unreachable, and the test that caught it failed on its first run.
   #
   # **v0.4.5 rather than v0.4.4, and a live run under v0.4.4 is what found it.** Run
   # `step56-cbact04c-20260906-153713` designed a correctly ordered job on the architect's *first*
@@ -239,7 +269,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.5"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.6"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

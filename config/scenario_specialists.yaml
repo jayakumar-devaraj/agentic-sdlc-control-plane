@@ -40,7 +40,7 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.4.8`, cut 2026-09-08. Verified from a clean virtualenv before
+  # than a placeholder: `v0.4.9`, cut 2026-09-08. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
   #
@@ -81,6 +81,38 @@ specialists:
   # One of these checks was *changed* rather than carried forward: it asserted that a tasklet
   # appears in the skip list with its role in the reason, which is exactly the behaviour ADR-0071
   # reverses. Left alone it would have failed for the right reason and read as a regression.
+  #
+  # **v0.4.9 rather than v0.4.8, and it is the tag that makes the second live design's job start.**
+  # Run `step60` was taken to confirm ADR-0076 holds on an independent design. It does -- five of
+  # five files bound, nothing stranded, nothing skipped, wiring compiled, *"every renderable step is
+  # wired"*. Then the job failed to start: a staging store `implements ItemWriter<T>, ItemReader<T>`,
+  # so a step that is both a *passthrough* and the head of the chain offers Spring two candidates
+  # for one parameter -- the file reader it reads from, and the store it writes to.
+  #
+  # ADR-0078 has the step bean name the bean it wants, **and only where a store could answer for the
+  # same type.** That condition is the decision rather than a detail. Qualifying every parameter is
+  # the obvious form of the fix and is wrong: the bean named is rendered by `java_file_bindings`,
+  # and a caller supplying its own bindings names it differently -- which turned an ambiguity one
+  # design had into a missing bean every project had, measured at nineteen integration errors and
+  # invisible to 940 green unit and contract tests.
+  #
+  # **Measured on the artifact that failed.** The delivered project was taken out of the container
+  # with its real processor bodies, its configuration re-rendered by the fixed renderer, and its job
+  # re-run: `FAILED` became `completed`, and its differential is `mismatched` on the same three of
+  # 1100 fields as `step59` -- ADR-0066's account break. Two independent designs now produce
+  # identical correct output.
+  #
+  # Interrogated functionally, **41 of 41**, from a clean virtualenv install of `v0.4.9` and again
+  # inside the rebuilt image. The four new checks assert *both* directions: qualified where a store
+  # shares the type, and **not** qualified where none does. The second is not symmetry for its own
+  # sake -- the broken version satisfied the first, so a check asserting only that would have passed
+  # it.
+  #
+  # **What no run has confirmed.** ADR-0078 was verified by driving the pipeline's own functions by
+  # hand, not by the pipeline doing it; `step60`'s parked run still carries the broken configuration.
+  # ADR-0077's generated-project workflow has still never run on a hosted runner, and the PAT's
+  # `pull requests: write` grant is still unproven -- both sit behind a release gate this platform's
+  # operator has held twice.
   #
   # **v0.4.8 rather than v0.4.7, and it is the first tag whose delivered artifact can be checked
   # where it lands.** Everything this pipeline verifies -- the compile, the rendered job's run, the
@@ -353,7 +385,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.8"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.9"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

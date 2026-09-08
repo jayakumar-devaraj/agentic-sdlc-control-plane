@@ -520,9 +520,9 @@ jobs:
           base_only="$(docker compose -f "$BASE" config)"
           echo "$base_only" | grep -q 'PUBLISH_MODE: none' || {
             echo "::error::the default deployment no longer publishes nothing - see ADR-0021 section 5"; exit 1; }
-          echo "$merged" | grep -q 'PUBLISH_MODE: branch' || {
-            echo "::error::the specialist override no longer sets PUBLISH_MODE=branch"; exit 1; }
-          echo "PUBLISH_MODE: none by default, branch under the override"
+          echo "$merged" | grep -q 'PUBLISH_MODE: pull_request' || {
+            echo "::error::the specialist override no longer sets PUBLISH_MODE=pull_request - see ADR-0029"; exit 1; }
+          echo "PUBLISH_MODE: none by default, pull_request under the override"
 
           # 3. The build-time pin and the runtime pin are the same string. They are in two files
           #    because one is read by docker build and one by the resolver; a disagreement fails

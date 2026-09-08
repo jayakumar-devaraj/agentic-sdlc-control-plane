@@ -39,11 +39,25 @@ services:
         # `SpecialistInvocationError` after a human has already approved a design.
         SPECIALIST_REQUIREMENT: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.7"
     environment:
-      # Overrides the base file's `none`. `branch` pushes `agentic-patch/{run_id}` to the
-      # routed `output_repository` after the release gate is approved, and never touches its
-      # default branch. `none` remains correct as the committed default (ADR-0021 section 5) -
-      # this file is the deliberate opt-in, which is the whole reason it is a separate file.
-      PUBLISH_MODE: branch
+      # Overrides the base file's `none`. `pull_request` pushes `agentic-patch/{run_id}` to the
+      # routed `output_repository` after the release gate is approved and then opens a PR from it
+      # against that repository's `output_branch` (defaulting to `main`). It still never writes to
+      # the default branch: a PR is a proposal, and merging stays a human act. `none` remains
+      # correct as the committed default (ADR-0021 section 5) - this file is the deliberate opt-in,
+      # which is the whole reason it is a separate file.
+      #
+      # **`pull_request` rather than `branch`, and the reason is reviewability.** Four runs had
+      # published four bare branches to `card-service` and none had ever been looked at as a diff,
+      # because a bare branch offers no review surface and triggers no checks. Each of those
+      # branches is one commit carrying a whole generated project (`ahead=1, behind=0` against a
+      # `main` holding only .gitignore, LICENSE and README), so they are alternatives rather than
+      # increments - and reading them as a queue of work to merge is the misreading a PR prevents.
+      #
+      # **A failed PR is not a failed run, by design.** The branch is pushed first; only the API
+      # call can fail after that, and `publish_change` reports it as a partial success carrying the
+      # branch name. So this is safe to enable before the PAT's `Pull requests: write` grant has
+      # been confirmed - the worst case is today's behaviour plus a logged error, never lost work.
+      PUBLISH_MODE: pull_request
       # Named explicitly rather than left to the code default, so the volume below and the
       # path the code resolves cannot drift apart silently.
       SPECIALIST_OUTPUT_ROOT: /specialist-output

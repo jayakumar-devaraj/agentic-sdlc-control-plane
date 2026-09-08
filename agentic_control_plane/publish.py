@@ -19,10 +19,18 @@ Three modes:
 - `none` (default) - commit and report, publish nothing. The pre-existing behaviour,
   and still the right one for an evaluation deployment.
 - `branch` - push `agentic-patch/{run_id}`. Host-agnostic: any git remote accepts it.
-- `pull_request` - push the branch, then open a pull request against the branch the
-  run cloned. GitHub-specific, because opening a PR is an API call and there is no
-  cross-host equivalent. On a non-GitHub remote this degrades to `branch` with a
-  logged reason rather than failing the run.
+- `pull_request` - push the branch, then open a pull request against the
+  `output_repository`'s `output_branch` (defaulting to `main`). GitHub-specific,
+  because opening a PR is an API call and there is no cross-host equivalent. On a
+  non-GitHub remote this degrades to `branch` with a logged reason rather than
+  failing the run.
+
+  **The output repository, not the one the run cloned.** An earlier version of this
+  sentence said "the branch the run cloned", and the two differ whenever a deployment
+  routes its output somewhere other than the repository it read: `publish_node` passes
+  `state.output_repository` and `state.output_branch`, both of which come from routing
+  rather than from the clone. A reader trusting the old sentence would look for these
+  pull requests in the wrong repository.
 
 **A publish failure does not fail the run.** The change was generated, tested and
 approved; those facts are true whether or not the push succeeded. But it must not be

@@ -40,7 +40,7 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.4.7`, cut 2026-09-07. Verified from a clean virtualenv before
+  # than a placeholder: `v0.4.8`, cut 2026-09-08. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
   #
@@ -81,6 +81,37 @@ specialists:
   # One of these checks was *changed* rather than carried forward: it asserted that a tasklet
   # appears in the skip list with its role in the reason, which is exactly the behaviour ADR-0071
   # reverses. Left alone it would have failed for the right reason and read as a regression.
+  #
+  # **v0.4.8 rather than v0.4.7, and it is the first tag whose delivered artifact can be checked
+  # where it lands.** Everything this pipeline verifies -- the compile, the rendered job's run, the
+  # differential against the COBOL oracle -- happens inside the specialist container, which then
+  # discards the workspace. The output repository re-checked none of it, and had **never run a
+  # workflow at all**: no `.github/` on any branch, `actions/runs` reporting `total_count: 0`. Four
+  # projects had been delivered that way, so the only evidence any of them built was a log line on
+  # a machine that no longer had the code.
+  #
+  # ADR-0077 puts `.github/workflows/build.yml` in the baseline template. `verify` rather than
+  # `test`, because `BaselineStackTest` is the check that the Spring context can start at all;
+  # through `./mvnw` on the JDK the pom pins, both asserted against the pom rather than restated;
+  # and deliberately without `-Dsurefire.failIfNoSpecifiedTests=false`, which ADR-0075 measured as
+  # making a build that matched no test exit 0 exactly like one that passed.
+  #
+  # **The packaging glob was the part that would have failed silently.** `data/templates/**/*` does
+  # not descend into a dot-directory -- that is how every wheel before ADR-0058 shipped without
+  # `.mvn/wrapper/maven-wrapper.properties`, leaving `./mvnw` exiting 1 before Maven started -- so
+  # `.github/workflows/*` needs its own line. Without it this release would have looked complete
+  # and shipped a template with no workflow in it.
+  #
+  # Interrogated functionally, **37 of 37**, from a clean virtualenv install of `v0.4.8` and again
+  # inside the rebuilt image -- the thirty-three v0.4.7 carried plus four for ADR-0077. The one
+  # that matters reads the workflow out of `site-packages` and materialises a project through
+  # `materialize_target_project` rather than listing a directory, because a check reading the
+  # repository would have stayed green through exactly the failure this release prevents.
+  #
+  # **This entry claims nothing about a delivered build passing.** The workflow has never run on a
+  # hosted runner. It is correct by construction and by four checks, and none of those is a green
+  # build; if `BaselineStackTest`'s Testcontainers requirement is not satisfiable there, ADR-0077
+  # says it is the record to amend. Branches delivered before this tag gain nothing retroactively.
   #
   # **v0.4.7 rather than v0.4.6, and it is the first tag that will not build a job which reads
   # fewer files than its COBOL names.** The entry below predicted this: both live `CBACT04C`
@@ -322,7 +353,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.7"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.8"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

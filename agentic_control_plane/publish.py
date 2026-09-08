@@ -26,11 +26,11 @@ Three modes:
   failing the run.
 
   **The output repository, not the one the run cloned.** An earlier version of this
-  sentence said "the branch the run cloned", and the two are different whenever they
-  are configured to be: `publish_node` passes `state.output_repository` and
-  `state.output_branch`, and this platform's own deployment clones
-  `carddemo-tenant-service` while publishing to `card-service`. A reader trusting the
-  old sentence would look for these pull requests in the wrong repository.
+  sentence said "the branch the run cloned", and the two differ whenever a deployment
+  routes its output somewhere other than the repository it read: `publish_node` passes
+  `state.output_repository` and `state.output_branch`, both of which come from routing
+  rather than from the clone. A reader trusting the old sentence would look for these
+  pull requests in the wrong repository.
 
 **A publish failure does not fail the run.** The change was generated, tested and
 approved; those facts are true whether or not the push succeeded. But it must not be

@@ -40,7 +40,7 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.4.6`, cut 2026-09-07. Verified from a clean virtualenv before
+  # than a placeholder: `v0.4.7`, cut 2026-09-07. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
   #
@@ -81,6 +81,59 @@ specialists:
   # One of these checks was *changed* rather than carried forward: it asserted that a tasklet
   # appears in the skip list with its role in the reason, which is exactly the behaviour ADR-0071
   # reverses. Left alone it would have failed for the right reason and read as a regression.
+  #
+  # **v0.4.7 rather than v0.4.6, and it is the first tag that will not build a job which reads
+  # fewer files than its COBOL names.** The entry below predicted this: both live `CBACT04C`
+  # designs bound three of the program's five files, and it said a `mismatched` from v0.4.6 was at
+  # least as likely to be about the two files the job never opened as about the arithmetic. It was
+  # not a prediction about one design. **All three** live designs ever written for this program
+  # carry the same shape -- the join written as its own step, `TranCatBal -> TranCatBalWithAccount`
+  # -- and a rendered processor has one method, `process(item)`, and no way to open a file.
+  #
+  # ADR-0076 closes it. `unsupplied_components` names the keyed-lookup entities a step's output
+  # promises and its input lacks, with the `ASSIGN TO` each comes from. `plan_steps` reports them
+  # as a skip naming the files and the move; `render_job_wiring` **raises**, reaching
+  # `WiringVerdict(status="refused")`.
+  #
+  # **Refused rather than skipped, and that was measured rather than argued.** Left out, the join
+  # takes the job's driving input with it: bindings collapse to `acctfile` and `transact`, losing
+  # `TCATBALF`, and `computeMonthlyInterest` reads a staging store whose producer is gone. It
+  # still compiles and starts. A run of that job reports a differential about files it never
+  # opened, which is worse than the defect being fixed.
+  #
+  # **Only keyed lookups count.** A component the step computes is ordinary work -- a step that
+  # builds a `Tran` and carries it out is not a join. A first version of the check counted every
+  # added component and refused the interest calculation itself: 39 tests failing against 9, and
+  # `is_keyed_lookup` is the whole of the difference.
+  #
+  # **The renderer needed no new capability.** Folding the resolve steps into the step that
+  # consumes their output binds five of five and renders a four-path reader, with nothing changed
+  # in the reader or the bindings. Only the design shape was ever in the way, which is why the
+  # other half of this release is prompt `v1_6_0` stating the rule -- the two-halves shape every
+  # version since `v1_1_0` has used.
+  #
+  # **This release introduced one regression and fixed it.** A skip that no reordering clears made
+  # ADR-0072's refusal go silent, because its move search looks for a move after which nothing is
+  # skipped. That search now weighs only the skips a move could fix, and an interrogation check
+  # asserts it -- an artifact carrying ADR-0076 with a silenced ADR-0072 would pass every ADR-0076
+  # check.
+  #
+  # **This entry predicts nothing about the differential, and for a new reason.** No live run has
+  # ever been made against a design that binds all five files, so there is no measured baseline for
+  # one. What is claimed is narrower: the job that runs will have opened every file its COBOL
+  # names, or it will not have been built.
+  #
+  # Interrogated functionally, **33 of 33**, from a clean virtualenv install of `v0.4.7` -- the
+  # twenty-seven v0.4.6 carried plus six for ADR-0076, built on renamed entities (`Driver`,
+  # `Widget`, `WIDGETFILE`) rather than `CBACT04C`'s own, so an implementation that only knew the
+  # string `XREFFILE` fails them. Two inherited checks were **changed rather than carried
+  # forward**: both pinned `PROMPT_VERSION == "v1_5_0"`, and left alone they failed while their own
+  # detail lines read `rule present=True` -- the same false-regression shape as the v0.4.5 tasklet
+  # check.
+  #
+  # One of the six caught a false pass in itself before it shipped: written first without a step to
+  # consume the joined item, `plan_steps` refused it as a dead end and the wiring check -- which
+  # asserted only the step name -- went green on a refusal that had nothing to do with ADR-0076.
   #
   # **v0.4.6 rather than v0.4.5, and it is the first tag whose pipeline runs what it generated.**
   # Every tag before this one produced a job and stopped: `generate` called `compile_project` with
@@ -269,7 +322,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.6"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.7"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

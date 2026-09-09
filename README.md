@@ -16,6 +16,12 @@ continuing.
 > PowerShell and no credentials. The recorded result is in
 > [Functional verification](#functional-verification).
 
+> **Driving a real specialist run?** That is a different path — a pinned external CLI that designs,
+> generates and differentially tests real code, with real model spend.
+> [Driving a specialist run](#driving-a-specialist-run) has the command sequence and the traps,
+> including the one that is not optional: publish is refused a pull request by the runtime PAT, so
+> you open it by hand.
+
 ## Tech stack
 
 - **Orchestration**: Python 3.12, LangGraph 1.2.9
@@ -245,6 +251,106 @@ a Windows path before it ever reaches the container, and the producer fails with
 The `uuid` helper exists for the same class of reason. `event_id` is a strict `UUID` on the
 envelope, and an empty or malformed one fails validation — the event is routed to the DLQ and the
 parked run simply never resumes, which looks like a hang rather than a rejection.
+
+### Driving a specialist run
+
+The recipe above drives the **demo** path: a synthetic fixture, no specialist, no credentials. A
+*specialist* run is a different thing — it invokes a pinned external CLI (`cobol-modernizer`) that
+designs, generates and differentially tests real code, then delivers it to an output repository. It
+costs real model spend and takes roughly 12 minutes end to end.
+
+Everything below was used to drive run `step62-cbact04c-20260908-212245`, recorded in the
+specialist's own [verification 25](https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer/blob/main/docs/qa/verification/25-the-delivered-artifact-builds.md).
+
+#### 1. Bring up the specialist-capable stack
+
+**Both compose files, and `CLAUDE_SESSION_DIR`.** The overlay alone starts a consumer that exits on
+`KAFKA_BOOTSTRAP_SERVERS must be set` — it is an override, not a second stack.
+
+```bash
+export CLAUDE_SESSION_DIR="$HOME/.claude"
+docker compose -f docker-compose.yml -f docker-compose.specialist.yml up -d
+```
+
+The specialist version is baked into the image at build time from the pin in
+`docker-compose.specialist.yml`, so a stack that was already up is running whatever it was built
+with. **After changing the pin, rebuild — restarting is not enough.**
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.specialist.yml build consumer
+docker exec agentic-sdlc-control-plane-consumer \
+  python -c "import importlib.metadata as md; print(md.version('cobol-modernizer'))"
+```
+
+#### 2. Start the run
+
+`RUN_ID` must be unique — it is the `correlation_id` and the LangGraph `thread_id`, and every gate
+decision correlates on it.
+
+```bash
+RUN_ID="step63-cbact04c-$(date +%Y%m%d-%H%M%S)"
+python scripts/publish_drift.py "$RUN_ID"
+```
+
+**Check the exit code, not the absence of a traceback.** A host-side publish to this broker
+intermittently times out — roughly three in eight — so the script asserts the topic's end offset
+moved by exactly one and exits non-zero otherwise. On `DID NOT LAND`, run it again.
+
+Watch with `docker logs -f agentic-sdlc-control-plane-consumer`. The Kafka client is chatty;
+filtering out `kafka.(conn|coordinator|consumer|cluster|protocol)` leaves the run's own lines.
+Beware of waiting on the word *gate* alone: the consumer logs its **subscription** to
+`control-plane.gate-decision.v1` at startup, which matches and reads like a park that has not
+happened yet.
+
+#### 3. Answer the two gates
+
+A specialist run parks twice, and the gate names are not free text:
+
+```bash
+python scripts/publish_gate.py "$RUN_ID" specialist_design_review approve "..."
+# ... wait for the second park ...
+python scripts/publish_gate.py "$RUN_ID" merge_release_approval approve "..."
+```
+
+**Pre-flight the design before approving the first gate.** The design is the cheapest thing to
+reject, and rendering it offline takes seconds against a generate phase of several minutes:
+
+```bash
+docker cp "agentic-sdlc-control-plane-consumer:/workspaces/$RUN_ID/.specialist-design/design.json" ./design.json
+```
+
+Render it with the specialist's own `run_generate` and a scripted author. A `wiring: rendered`
+verdict with `skipped_steps=[]` means the generate phase will wire every step. On **Git Bash for
+Windows**, `docker cp` to a host path needs a Windows-style destination (`C:/srcCode/...`) even with
+`MSYS_NO_PATHCONV=1`, or it invents a nested `C:\c\Users\...`.
+
+The second gate carries the differential verdict. `mismatched` is not automatically a defect —
+`CBACT04C`'s three account-break fields are a documented-correct divergence, and three independent
+designs have produced exactly them.
+
+#### 4. Open the pull request by hand
+
+Approving `merge_release_approval` commits, pushes, and then **fails to open the pull request**:
+
+```
+INFO  publish: pushed to agentic-patch/<run_id>
+ERROR publish: could not open a pull request: GitHub returned 403
+      {"message":"Resource not accessible by personal access token"}
+```
+
+The runtime PAT has no `pull_requests: write`. The repo-level `permissions` probe does **not** cover
+that grant, so a token reporting `admin/maintain/pull/push/triage` still cannot do this. The run
+still reaches `completed`; only the PR is missing.
+
+```bash
+gh pr create --repo <owner>/<output-repo> --base main --head "agentic-patch/$RUN_ID" ...
+```
+
+**Do not widen the token to fix this.** The control plane opening pull requests and writing CI would
+mean CI running model-generated code with the output repository's secrets — the reason CI belongs to
+the output repository's default branch at all. Opening it by hand keeps a person on that step, and
+the delivered branch's own `verify` still runs: for `pull_request`, the workflow is resolved from the
+base branch, so a delivered branch needs no workflow of its own.
 
 ## Local development
 

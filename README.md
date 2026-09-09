@@ -321,8 +321,9 @@ docker cp "agentic-sdlc-control-plane-consumer:/workspaces/$RUN_ID/.specialist-d
 
 Render it with the specialist's own `run_generate` and a scripted author. A `wiring: rendered`
 verdict with `skipped_steps=[]` means the generate phase will wire every step. On **Git Bash for
-Windows**, `docker cp` to a host path needs a Windows-style destination (`C:/srcCode/...`) even with
-`MSYS_NO_PATHCONV=1`, or it invents a nested `C:\c\Users\...`.
+Windows**, the destination of a `docker cp` out of the container must be an absolute path in
+drive-letter form (`<drive>:/<dir>/design.json`) even with `MSYS_NO_PATHCONV=1`; given a POSIX-style
+path it silently prefixes the drive and writes somewhere nested that nothing then finds.
 
 The second gate carries the differential verdict. `mismatched` is not automatically a defect —
 `CBACT04C`'s three account-break fields are a documented-correct divergence, and three independent

@@ -40,7 +40,7 @@ specialists:
   # config toggle.
   #
   # `distribution` is the pinned requirement ADR-0055 decided, and it is a real tag rather
-  # than a placeholder: `v0.4.9`, cut 2026-09-08. Verified from a clean virtualenv before
+  # than a placeholder: `v0.4.10`, cut 2026-09-08. Verified from a clean virtualenv before
   # being written here - the CLI starts, reads its own packaged prompts and Java baseline
   # with no checkout on any path, and that baseline's Maven wrapper resolves.
   #
@@ -81,6 +81,50 @@ specialists:
   # One of these checks was *changed* rather than carried forward: it asserted that a tasklet
   # appears in the skip list with its role in the reason, which is exactly the behaviour ADR-0071
   # reverses. Left alone it would have failed for the right reason and read as a regression.
+  #
+  # **v0.4.10 rather than v0.4.9, and it is the tag whose delivered artifact can start.** Every
+  # release through v0.4.9 rendered readers and writers that did their file work *in their
+  # constructors*. Spring Boot's `jobOperator` resolves every `Job` eagerly, which forces the steps,
+  # which forces the readers -- so a delivered project opened its files while the context was
+  # starting and died on `NoSuchFileException: data\TCATBALF` before any test ran. `@Lazy` on the
+  # bindings was documented as the defence against exactly this and cannot work: it defers *when* a
+  # bean is built, and the job graph is built during startup regardless.
+  #
+  # ADR-0081 has them take their `Path`s in the constructor and touch the disk in
+  # `ItemStream.open`. A chunk step registers an `ItemStream` reader or writer automatically, so no
+  # wiring changed.
+  #
+  # **The scope in the plan was wrong in both directions, and rendering a design offline found it.**
+  # The aggregating reader named in the plan needed no change -- it was already lazy. Both *writers*
+  # did, and were named nowhere: one loads the file it updates while being constructed, and the
+  # other called `Files.deleteIfExists` there, which deletes the job's own output whenever a Spring
+  # context refreshes. The readers were only what failed *first*.
+  #
+  # **Measured on the artifact, not on the suite.** The same design and the same scripted processors,
+  # only the renderer differing: `BaselineStackTest` went from 5 errors and BUILD FAILURE to 0 errors
+  # and BUILD SUCCESS, and the missing file moved from context startup into
+  # `ComputeMonthlyInterestItemReader.open` -- a job-start failure naming the path, which is what
+  # ADR-0066 wanted and `@Lazy` never delivered. A mechanical sweep of every rendered constructor
+  # reports zero doing file I/O.
+  #
+  # Interrogated functionally, **47 of 47**, from a clean virtualenv install of `v0.4.10` and again
+  # inside the rebuilt image. Six checks are new and built on renamed entities (`Ledger`, `Rate`,
+  # `Posting`, program `LEDGERP`), so an implementation recognising `CBACT04C` fails rather than
+  # passes; each asserts the reads are in `open` **and** that the constructor only assigns, because
+  # a class declaring `ItemStream` while keeping its reads in the constructor would satisfy the
+  # presence half and defer nothing.
+  #
+  # **Four inherited checks were replaced rather than carried forward.** ADR-0077's asserted the
+  # template *carries* `.github/workflows/build.yml`; ADR-0079 superseded it and removed the file,
+  # and v0.4.10 is the first release shipping that removal -- so re-running them would have reported
+  # four failures meaning the opposite of what they look like. The ADR-0079 checks assert both
+  # directions: no `.github/` **and** a template that still materializes a buildable project.
+  #
+  # **What no run has confirmed.** No live run was made on v0.4.10, so the pipeline has not itself
+  # delivered an artifact carrying this fix. `card-service` PR #1 stays red on ADR-0080's bean
+  # collision: its Java was rendered under v0.4.7 and carries neither that fix nor this one, so only
+  # a fresh delivery would turn it green. ADR-0078 likewise remains confirmed by hand and never by
+  # the pipeline, and `step60` stays parked.
   #
   # **v0.4.9 rather than v0.4.8, and it is the tag that makes the second live design's job start.**
   # Run `step60` was taken to confirm ADR-0076 holds on an independent design. It does -- five of
@@ -385,7 +429,7 @@ specialists:
   cobol-modernizer:
     kind: external
     command: cobol-modernizer
-    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.9"
+    distribution: "cobol-modernizer @ git+https://github.com/jayakumar-devaraj/agentic-sdlc-cobol-modernizer@v0.4.10"
     phases:
       design:
         # `--programs` is REQUIRED by this specialist, and control-plane cannot supply it.

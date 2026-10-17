@@ -72,6 +72,12 @@ jobs:
       POSTGRES_PASSWORD: control_plane
     steps:
       - uses: actions/checkout@v7
+        with:
+          # From v6, checkout keeps its repo-scoped GITHUB_TOKEN in a separate file pulled in
+          # by an `includeIf` in the local config, so unsetting the local extraheader below no
+          # longer removes it. It then outranks EVENTBUS_READ_PAT and every clone of eventbus
+          # fails. Nothing in this job pushes, so it does not need the credential at all.
+          persist-credentials: false
 
       - uses: actions/setup-python@v7
         with:

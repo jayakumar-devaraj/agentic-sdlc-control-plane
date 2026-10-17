@@ -9,7 +9,6 @@
 #
 # So a pydantic bump is not a decision this repository can take. It is a request to
 # agentic-sdlc-eventbus to re-release agentic-events with a range instead of an exact pin.
-# Until then, expect Dependabot to keep proposing it and expect that PR to stay red.
 #
 # *** agentic-events INSTALLS WHETHER agentic-sdlc-eventbus IS PUBLIC OR PRIVATE. ***
 #

@@ -186,7 +186,6 @@ def test_every_spec_directory_is_numbered_and_complete():
         ".gitignore",
         ".dockerignore",
         ".github/CODEOWNERS",
-        ".github/dependabot.yml",
         "scripts/check_lock_is_current.py",
         "scripts/validate-mermaid.mjs",
     ],

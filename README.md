@@ -27,7 +27,7 @@ continuing.
 - **Orchestration**: Python 3.12, LangGraph 1.2.9
 - **State/validation**: Pydantic 2.10.4 (pinned by the shared `agentic-events` contract, not chosen
   independently)
-- **Checkpointing**: langgraph-checkpoint-postgres 3.0.5 against its own `postgres:16-alpine`
+- **Checkpointing**: langgraph-checkpoint-postgres 3.1.3 against its own `postgres:16-alpine`
 - **Events**: kafka-python-ng 2.2.3, `agentic-events` (shared envelope contract)
 - **Configuration**: PyYAML 6.0.3, for the specialist routing table
 - **Testing**: pytest 8.3.4, pytest-cov 7.1.0

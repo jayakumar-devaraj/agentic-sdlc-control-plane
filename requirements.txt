@@ -30,7 +30,7 @@
 # reason: a fine-grained PAT is scoped to a repository, and asking one to authenticate
 # through a rename redirect adds a failure mode nobody needs while diagnosing access.
 langgraph==1.2.11
-langgraph-checkpoint-postgres==3.1.2
+langgraph-checkpoint-postgres==3.1.3
 psycopg[binary]==3.3.5
 pydantic==2.10.4
 # Read by specialists.py for the routing table (ADR-0016). Already resolvable as a
